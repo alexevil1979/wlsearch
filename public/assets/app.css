@@ -1,0 +1,201 @@
+:root {
+  --bg: #0f1419;
+  --bg2: #1a222c;
+  --surface: #232d3a;
+  --text: #e8eef4;
+  --muted: #8b9aab;
+  --accent: #3d9a6a;
+  --accent-hover: #4db87f;
+  --danger: #c45c5c;
+  --border: #2f3b4a;
+  --warn: #c9a227;
+  --radius: 8px;
+  --font: "Segoe UI", system-ui, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: var(--font);
+  background: linear-gradient(160deg, #0c1015 0%, #15202b 45%, #0f1419 100%);
+  color: var(--text);
+  min-height: 100vh;
+  line-height: 1.45;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { color: var(--accent-hover); }
+
+.wrap {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 1rem;
+}
+
+.topbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.25rem;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.85rem 1rem;
+  background: rgba(26, 34, 44, 0.92);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  backdrop-filter: blur(8px);
+  z-index: 10;
+}
+
+.brand {
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--text);
+  font-size: 1.1rem;
+}
+
+.nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem 1rem;
+  font-size: 0.92rem;
+}
+
+.nav a { color: var(--muted); }
+.nav a:hover,
+.nav a.active { color: var(--text); }
+
+.card {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.1rem 1.2rem;
+  margin-bottom: 1rem;
+}
+
+h1 { font-size: 1.35rem; margin: 0 0 0.75rem; }
+h2 { font-size: 1.1rem; margin: 0 0 0.6rem; color: var(--text); }
+.muted { color: var(--muted); font-size: 0.92rem; }
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0.75rem;
+}
+
+.stat {
+  background: var(--surface);
+  border-radius: var(--radius);
+  padding: 0.9rem;
+  border: 1px solid var(--border);
+}
+
+.stat .label { color: var(--muted); font-size: 0.8rem; }
+.stat .value { font-size: 1.45rem; font-weight: 700; margin-top: 0.25rem; }
+
+.btn {
+  display: inline-block;
+  border: 0;
+  border-radius: var(--radius);
+  padding: 0.55rem 1rem;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+  cursor: pointer;
+  font-size: 0.95rem;
+}
+.btn:hover { background: var(--accent-hover); }
+.btn-secondary {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+.btn-danger { background: var(--danger); }
+
+label {
+  display: block;
+  margin: 0.7rem 0 0.3rem;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+input[type="text"],
+input[type="password"],
+input[type="number"],
+select,
+textarea {
+  width: 100%;
+  max-width: 420px;
+  padding: 0.55rem 0.7rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 1rem;
+}
+
+.flash {
+  padding: 0.75rem 1rem;
+  border-radius: var(--radius);
+  margin-bottom: 1rem;
+  border: 1px solid var(--border);
+}
+.flash-error { background: rgba(196, 92, 92, 0.15); border-color: var(--danger); }
+.flash-ok { background: rgba(61, 154, 106, 0.15); border-color: var(--accent); }
+
+.login-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+
+.login-box {
+  width: 100%;
+  max-width: 380px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.5rem;
+}
+
+.login-box .brand {
+  display: block;
+  text-align: center;
+  font-size: 1.5rem;
+  margin-bottom: 0.25rem;
+}
+
+.table-wrap { overflow-x: auto; }
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+th, td {
+  text-align: left;
+  padding: 0.55rem 0.45rem;
+  border-bottom: 1px solid var(--border);
+}
+th { color: var(--muted); font-weight: 600; }
+
+.badge {
+  display: inline-block;
+  padding: 0.15rem 0.45rem;
+  border-radius: 4px;
+  font-size: 0.78rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+.badge-ok { color: var(--accent); }
+.badge-warn { color: var(--warn); }
+.badge-err { color: var(--danger); }
+
+.stub { opacity: 0.75; font-style: italic; }
+
+@media (max-width: 640px) {
+  .topbar { align-items: flex-start; }
+  .nav { width: 100%; }
+}

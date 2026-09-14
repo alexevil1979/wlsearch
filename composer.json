@@ -1,0 +1,16 @@
+{
+    "name": "alexevil1979/wlsearch",
+    "description": "Find RU cloud IPv4 reachable via mobile whitelist (BS) mode",
+    "type": "project",
+    "require": {
+        "php": ">=8.2"
+    },
+    "autoload": {
+        "psr-4": {
+            "Wlsearch\\": "src/"
+        }
+    },
+    "bin": [
+        "bin/wlsearch"
+    ]
+}
