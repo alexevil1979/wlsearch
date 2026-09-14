@@ -45,15 +45,12 @@ final class RunService
         if (!in_array($provider, ['timeweb', 'selectel'], true)) {
             throw new \InvalidArgumentException('provider must be timeweb|selectel');
         }
-        if ($provider === 'selectel') {
-            throw new \RuntimeException('Selectel — Phase 3');
-        }
         if (!ProviderFactory::isConfigured($provider)) {
-            throw new \RuntimeException('Провайдер не настроен (проверьте .env токены)');
+            throw new \RuntimeException('Провайдер не настроен (проверьте .env)');
         }
 
         $count = max(1, min(20, $count));
-        $this->assertCanCreate($count);
+        $this->assertCanCreate($count, $provider);
 
         $ids = [];
         $stmt = $this->pdo->prepare(
@@ -89,12 +86,13 @@ final class RunService
         return $ids;
     }
 
-    public function assertCanCreate(int $count = 1): void
+    public function assertCanCreate(int $count = 1, string $provider = 'timeweb'): void
     {
         $maxParallel = Settings::int('MAX_PARALLEL_VMS', 3);
         $maxDay = Settings::int('MAX_CREATES_PER_DAY', 20);
         $maxSpend = Settings::int('MAX_DAILY_SPEND_RUB', 500);
-        $cost = Settings::int('TIMEWEB_PRESET_COST_RUB', 0);
+        $costKey = strtolower($provider) === 'selectel' ? 'SELECTEL_PRESET_COST_RUB' : 'TIMEWEB_PRESET_COST_RUB';
+        $cost = Settings::int($costKey, 0);
 
         $active = (int) $this->pdo->query(
             "SELECT COUNT(*) FROM runs WHERE state IN ('ORDERING','PROVISIONING','BOOTSTRAPPING','CONTROL_CHECK','BS_CHECK','DESTROYING')"

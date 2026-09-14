@@ -12,7 +12,7 @@ final class ProviderFactory
     {
         return match (strtolower($provider)) {
             'timeweb' => new TimewebProvider(),
-            'selectel' => throw new \RuntimeException('Selectel provider is Phase 3 — not implemented yet'),
+            'selectel' => new SelectelProvider(),
             default => throw new \InvalidArgumentException('Unknown provider: ' . $provider),
         };
     }
@@ -21,7 +21,12 @@ final class ProviderFactory
     {
         return match (strtolower($provider)) {
             'timeweb' => (Env::get('TIMEWEB_API_TOKEN') ?? '') !== '',
-            'selectel' => false,
+            'selectel' => (Env::get('SELECTEL_USERNAME') ?? '') !== ''
+                && (Env::get('SELECTEL_PASSWORD') ?? '') !== ''
+                && (Env::get('SELECTEL_AUTH_URL') ?? '') !== ''
+                && (Env::get('SELECTEL_FLAVOR_ID') ?? '') !== ''
+                && (Env::get('SELECTEL_IMAGE_ID') ?? '') !== ''
+                && (Env::get('SELECTEL_NETWORK_ID') ?? '') !== '',
             default => false,
         };
     }

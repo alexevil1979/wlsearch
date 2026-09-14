@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Wlsearch\Worker;
 
 use PDO;
+use Wlsearch\Blacklist\BlacklistService;
 use Wlsearch\Notify\TelegramNotifier;
 use Wlsearch\Probe\CloudInitBuilder;
 use Wlsearch\Probe\ControlChecker;
@@ -14,6 +15,7 @@ use Wlsearch\Support\AsnLookup;
 use Wlsearch\Support\Database;
 use Wlsearch\Support\Env;
 use Wlsearch\Support\Settings;
+use Wlsearch\Task\TaskService;
 
 final class Worker
 {
@@ -21,21 +23,40 @@ final class Worker
     private RunService $runs;
     private ControlChecker $control;
     private TelegramNotifier $tg;
+    private TaskService $tasks;
+    private BlacklistService $blacklist;
 
     public function __construct(
         ?PDO $pdo = null,
         ?RunService $runs = null,
         ?ControlChecker $control = null,
         ?TelegramNotifier $tg = null,
+        ?TaskService $tasks = null,
+        ?BlacklistService $blacklist = null,
     ) {
         $this->pdo = $pdo ?? Database::pdo();
         $this->runs = $runs ?? new RunService($this->pdo);
         $this->control = $control ?? new ControlChecker();
         $this->tg = $tg ?? new TelegramNotifier();
+        $this->tasks = $tasks ?? new TaskService($this->pdo);
+        $this->blacklist = $blacklist ?? new BlacklistService($this->pdo);
     }
 
     public function tick(): int
     {
+        $expired = $this->tasks->expireStale();
+        if ($expired > 0) {
+            fwrite(STDOUT, "expired BS tasks: {$expired}\n");
+        }
+
+        // Ensure pending tasks for BS_CHECK runs
+        $bsRuns = $this->pdo->query(
+            "SELECT id, ipv4 FROM runs WHERE state = 'BS_CHECK' AND ipv4 IS NOT NULL AND ipv4 != ''"
+        )->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        foreach ($bsRuns as $r) {
+            $this->tasks->ensureTaskForRun((int) $r['id'], (string) $r['ipv4']);
+        }
+
         $processed = 0;
         $stmt = $this->pdo->query(
             "SELECT * FROM runs
@@ -65,7 +86,6 @@ final class Worker
         $id = (int) $run['id'];
         $state = (string) $run['state'];
 
-        // Auto-queue destroy for failed without keep
         if (in_array($state, ['FAIL_BS', 'FAIL_CONTROL', 'ERROR'], true)
             && !(int) $run['keep_on_fail']
             && !empty($run['provider_server_id'])
@@ -101,10 +121,15 @@ final class Worker
             'comment' => $run['comment'] ?? ('wlsearch run #' . $id),
         ]);
 
+        $meta = null;
+        if (!empty($info->raw['_wlsearch_meta']) && is_array($info->raw['_wlsearch_meta'])) {
+            $meta = json_encode($info->raw['_wlsearch_meta'], JSON_UNESCAPED_UNICODE);
+        }
+
         $stmt = $this->pdo->prepare(
-            'UPDATE runs SET provider_server_id = ?, ipv4 = ?, state = ?, updated_at = NOW() WHERE id = ?'
+            'UPDATE runs SET provider_server_id = ?, ipv4 = ?, provider_meta = ?, state = ?, updated_at = NOW() WHERE id = ?'
         );
-        $stmt->execute([$info->id, $info->ipv4, 'PROVISIONING', $id]);
+        $stmt->execute([$info->id, $info->ipv4, $meta, 'PROVISIONING', $id]);
         fwrite(STDOUT, "run #{$id}: created server {$info->id}\n");
     }
 
@@ -127,6 +152,16 @@ final class Worker
             $lookup = AsnLookup::lookup($info->ipv4);
             $asn = $lookup['asn'];
             $asnOrg = $lookup['org'];
+
+            $bl = $this->blacklist->checkIp($info->ipv4, $asn);
+            if ($bl['blocked']) {
+                $stmt = $this->pdo->prepare(
+                    'UPDATE runs SET ipv4 = ?, asn = ?, asn_org = ? WHERE id = ?'
+                );
+                $stmt->execute([$info->ipv4, $asn, $asnOrg, $id]);
+                $this->failRun($id, 'ERROR', 'blacklist: ' . ($bl['reason'] ?? 'blocked'));
+                return;
+            }
         }
 
         $stmt = $this->pdo->prepare(
@@ -185,13 +220,13 @@ final class Worker
                 'UPDATE runs SET control_ok = 1, state = ?, error_message = NULL, updated_at = NOW() WHERE id = ?'
             );
             $stmt->execute(['BS_CHECK', $id]);
-            $this->tg->send("wlsearch: CONTROL_OK run #{$id} ip={$ipv4} → BS_CHECK (ожидает phone-agent)");
-            fwrite(STDOUT, "run #{$id}: CONTROL_OK → BS_CHECK\n");
+            $this->tasks->ensureTaskForRun($id, $ipv4);
+            $this->tg->send("wlsearch: CONTROL_OK run #{$id} ip={$ipv4} → BS_CHECK");
+            fwrite(STDOUT, "run #{$id}: CONTROL_OK → BS_CHECK + task\n");
             return;
         }
 
         $timeout = Settings::int('CONTROL_CHECK_TIMEOUT_SEC', Env::int('CONTROL_CHECK_TIMEOUT_SEC', 300));
-        // Allow a few retries within short window after entering CONTROL_CHECK
         if ($this->updatedAgeSeconds($run) > $timeout) {
             $this->failControl($run, $result['error'] ?? 'control check failed');
         }
@@ -256,6 +291,7 @@ final class Worker
         $stmt->execute([$state, $id]);
     }
 
+    /** @param array<string, mixed> $run */
     private function updatedAgeSeconds(array $run): int
     {
         $updated = strtotime((string) ($run['updated_at'] ?? $run['created_at'])) ?: time();

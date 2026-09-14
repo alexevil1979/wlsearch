@@ -19,6 +19,6 @@ final class ServerInfo
         $s = strtolower($this->status);
         return $this->ipv4 !== null
             && $this->ipv4 !== ''
-            && in_array($s, ['on', 'active', 'running', 'started'], true);
+            && in_array($s, ['on', 'active', 'running', 'started', 'ok'], true);
     }
 }

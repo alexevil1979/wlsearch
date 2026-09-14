@@ -39,7 +39,9 @@ final class RunsController
             'csrf' => Csrf::field(),
             'nav' => 'runs',
             'timewebConfigured' => ProviderFactory::isConfigured('timeweb'),
+            'selectelConfigured' => ProviderFactory::isConfigured('selectel'),
             'defaultRegion' => Env::get('TIMEWEB_AVAILABILITY_ZONE', 'spb-3'),
+            'defaultSelectelRegion' => Env::get('SELECTEL_REGION', 'ru-9a'),
             'maxParallel' => Settings::int('MAX_PARALLEL_VMS', 3),
             'maxCreates' => Settings::int('MAX_CREATES_PER_DAY', 20),
         ]);

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Wlsearch\Cli;
 
 use Wlsearch\Database\Migrator;
+use Wlsearch\Device\DeviceService;
 use Wlsearch\Run\RunService;
 use Wlsearch\Support\Database;
 use Wlsearch\Support\Env;
@@ -24,7 +25,7 @@ final class Application
                 'run' => $this->runCreate($args),
                 'destroy-failed' => $this->destroyFailed(),
                 'inventory' => $this->inventory(),
-                'agent-token:create' => $this->notReady('agent-token:create'),
+                'agent-token:create' => $this->agentTokenCreate($args),
                 'health' => $this->health(),
                 'help', '--help', '-h' => $this->help(),
                 default => $this->unknown($command),
@@ -38,13 +39,13 @@ final class Application
     private function help(): int
     {
         $text = <<<TXT
-wlsearch CLI (Phase 1)
+wlsearch CLI (Phase 2–4)
 
 Usage:
   php bin/wlsearch migrate
   php bin/wlsearch health
   php bin/wlsearch worker
-  php bin/wlsearch run --provider=timeweb --region=spb-3 --count=1 [--keep-on-fail] [--comment=...]
+  php bin/wlsearch run --provider=timeweb|selectel --region=... --count=1 [--keep-on-fail]
   php bin/wlsearch destroy-failed
   php bin/wlsearch inventory
   php bin/wlsearch agent-token:create --name=phone-mts --operator=mts
@@ -63,7 +64,7 @@ TXT;
     {
         $pdo = Database::tryPdo();
         $db = $pdo ? 'up' : 'down';
-        fwrite(STDOUT, "app=" . (Env::get('APP_NAME', 'wlsearch') ?? 'wlsearch') . " db={$db} phase=1\n");
+        fwrite(STDOUT, "app=" . (Env::get('APP_NAME', 'wlsearch') ?? 'wlsearch') . " db={$db} phase=4\n");
         return $pdo ? 0 : 1;
     }
 
@@ -87,7 +88,6 @@ TXT;
 
         $ids = (new RunService())->createRuns($provider, $region, $count, $keep, $comment, 'cli');
         fwrite(STDOUT, 'Created runs: #' . implode(', #', $ids) . "\n");
-        fwrite(STDOUT, "Run worker to advance state machine.\n");
         return 0;
     }
 
@@ -105,39 +105,41 @@ TXT;
             fwrite(STDERR, "DB unavailable\n");
             return 1;
         }
-        try {
-            $rows = $pdo->query(
-                "SELECT ipv4, provider, operators, status, found_at FROM inventory WHERE status = 'active' ORDER BY found_at DESC LIMIT 100"
-            )->fetchAll();
-        } catch (\Throwable $e) {
-            fwrite(STDERR, 'inventory query failed (migrate first?): ' . $e->getMessage() . "\n");
-            return 1;
-        }
+        $rows = $pdo->query(
+            "SELECT ipv4, provider, operators, status, found_at FROM inventory WHERE status = 'active' ORDER BY found_at DESC LIMIT 100"
+        )->fetchAll();
 
         if ($rows === []) {
             fwrite(STDOUT, "Inventory empty.\n");
             return 0;
         }
         foreach ($rows as $row) {
-            fwrite(
-                STDOUT,
-                sprintf(
-                    "%-15s  %-10s  %-20s  %s  %s\n",
-                    $row['ipv4'],
-                    $row['provider'],
-                    (string) $row['operators'],
-                    $row['status'],
-                    $row['found_at']
-                )
-            );
+            fwrite(STDOUT, sprintf(
+                "%-15s  %-10s  %-20s  %s  %s\n",
+                $row['ipv4'],
+                $row['provider'],
+                (string) $row['operators'],
+                $row['status'],
+                $row['found_at']
+            ));
         }
         return 0;
     }
 
-    private function notReady(string $cmd): int
+    /** @param list<string> $args */
+    private function agentTokenCreate(array $args): int
     {
-        fwrite(STDERR, "{$cmd}: not implemented until Phase 2\n");
-        return 1;
+        $opts = $this->parseOpts($args);
+        $name = (string) ($opts['name'] ?? '');
+        $operator = (string) ($opts['operator'] ?? 'other');
+        if ($name === '') {
+            fwrite(STDERR, "--name required\n");
+            return 1;
+        }
+        $result = (new DeviceService())->create($name, $operator, 'cli');
+        fwrite(STDOUT, "device_id={$result['device']['id']} operator={$operator}\n");
+        fwrite(STDOUT, "TOKEN (save once): {$result['token']}\n");
+        return 0;
     }
 
     private function unknown(string $command): int

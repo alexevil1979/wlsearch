@@ -26,7 +26,16 @@ php8.2 bin/wlsearch run --provider=timeweb --region=spb-3 --count=1
 php8.2 bin/wlsearch worker
 ```
 
-Убедитесь, что в `.env` заданы `TIMEWEB_API_TOKEN`, `TIMEWEB_PRESET_ID`, `TIMEWEB_OS_ID`.
+### Phone agent
+
+```bash
+php8.2 bin/wlsearch agent-token:create --name=phone-mts --operator=mts
+# на телефоне: agents/termux/wlsearch_agent.sh
+```
+
+### Selectel
+
+Заполните `SELECTEL_*` в `.env` (flavor, image, network, auth). Для публичного IP задайте `SELECTEL_EXTERNAL_NET_ID` при private network.
 
 ### Destroy failed
 

@@ -2,30 +2,51 @@
 
 Агент работает на Android с SIM. Wi‑Fi **выкл**, VPN на телефоне **выкл**.
 
-## API (тот же домен)
+## API
 
 База: `https://wlsearch.1tlt.ru`
 
 | Метод | Путь | Назначение |
 |-------|------|------------|
-| GET | `/api/v1/agent/tasks/next` | Bearer device_token → JSON или 204 |
-| POST | `/api/v1/agent/tasks/{id}/result` | Вердикт + тело/маркер |
-| POST | `/api/v1/agent/heartbeat` | Online status |
+| GET | `/api/v1/agent/tasks/next` | Bearer → JSON задача или **204** |
+| POST | `/api/v1/agent/tasks/{id}/result` | Вердикт |
+| POST | `/api/v1/agent/heartbeat` | Online |
 | GET | `/health` | Без auth |
 
-## PASS на стороне агента
+### Результат (JSON)
 
-1. Убедиться: cellular, не Wi‑Fi, не VPN
-2. `GET http://<candidate-ipv4>/` (таймаут короткий)
-3. Тело содержит `WL_PROBE_OK`
-4. `POST .../result` с `bs_ok`, `cellular`, raw snippet
-
-## Токен
-
-```bash
-php bin/wlsearch agent-token:create --name=phone-mts --operator=mts
+```json
+{
+  "cellular": true,
+  "wifi": false,
+  "vpn": false,
+  "http_status": 200,
+  "http_ok": true,
+  "marker_ok": true,
+  "body": "WL_PROBE_OK timeweb run_1 ...",
+  "error": null
+}
 ```
 
-(доступно с Phase 2)
+**PASS** на сервере только если: `control_ok` ∧ `cellular` ∧ `!wifi` ∧ `!vpn` ∧ `marker_ok` ∧ `http_ok`.
 
-Скрипт агента и пример Termux — Phase 2.
+## Создать token
+
+Админка → Agents, или:
+
+```bash
+php8.2 bin/wlsearch agent-token:create --name=phone-mts --operator=mts
+```
+
+## Termux
+
+Скрипт в репо: `agents/termux/wlsearch_agent.sh`
+
+```bash
+pkg install curl python
+export WLSEARCH_URL=https://wlsearch.1tlt.ru
+export WLSEARCH_TOKEN='wls_...'
+bash wlsearch_agent.sh
+```
+
+Держите экран/Termux wake-lock по необходимости. Wi‑Fi выключить, VPN выключить.

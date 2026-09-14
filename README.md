@@ -1,77 +1,47 @@
 # wlsearch
 
-Поиск IPv4 в РФ-облаках (Timeweb / Selectel), которые **открываются с мобильной сети в режиме белых списков (БС)** (МТС / Билайн / МегаФон). PASS сохраняется в inventory; оператор управляет процессом через веб-админку.
+Поиск IPv4 в РФ-облаках (Timeweb / Selectel), открывающихся с мобильной сети в режиме **белых списков (БС)**. PASS → inventory; управление через веб-админку.
 
 **Админка:** https://wlsearch.1tlt.ru/  
-**Прод-путь:** `/ssd/www/wlsearch`  
-**Стек:** Apache2 + PHP 8.2 + MySQL 5.7 + Certbot
+**Прод:** `/ssd/www/wlsearch` — Apache2 + PHP 8.2 + MySQL 5.7 + Certbot
 
 ## Критерий PASS
 
-`PASS` только если одновременно:
+`control_ok ∧ bs_ok ∧ cellular ∧ маркер WL_PROBE_OK`  
+Проверка BS — только с Android + SIM (Wi‑Fi/VPN выкл). curl с Wi‑Fi/EU не считается.
 
-1. **control_ok** — probe отвечает с оркестратора (HTTP :80, маркер в теле);
-2. **bs_ok** — phone-agent с **cellular** (Wi‑Fi выкл, VPN на телефоне выкл) получил тот же маркер `WL_PROBE_OK`;
-3. **cellular** подтверждён агентом.
+## Возможности
 
-curl с Wi‑Fi / EU **не доказывает** БС-доступность.
+- Запуск прогонов (timeweb / selectel), лимиты, destroy/keep
+- Phone-agent API + Termux-скрипт
+- Inventory PASS, devices/tokens, blacklist ASN/prefix
+- Settings UI, audit log, Telegram notify
 
-## Что это НЕ делает
+## Не цель
 
-- Не ставит VLESS/Xray/Remnawave/Hiddify
-- Не настраивает WireGuard на EU exit
-- Не трогает Laravel RushVPN / HiddifySales
-- После PASS — inventory + уведомления; превращение IP в VPN entry — вне этого репо
+VLESS/Xray/WG/RushVPN/Hiddify — вне репо. После PASS IP используется оператором отдельно.
 
-## Phase 1 (текущий)
+## Деплой
 
-- Timeweb adapter: create / get / list / destroy + cloud-init probe
-- Worker state machine до `CONTROL_CHECK` → `BS_CHECK`
-- Админка: форма запуска, таблица Runs, destroy / keep / retry
-- Лимиты `MAX_PARALLEL_VMS` / `MAX_CREATES_PER_DAY` / spend
-- Telegram notify (опционально)
-- CLI: `run`, `worker`, `destroy-failed`
-
-## Phase 0
-
-- Login / session auth (CSRF, rate-limit)
-- Dashboard, `/health`, миграции, deploy docs
-
-## Быстрый старт (VPS)
-
-См. полный runbook: [docs/DEPLOY.md](docs/DEPLOY.md)
+См. [docs/DEPLOY.md](docs/DEPLOY.md)
 
 ```bash
-sudo mkdir -p /ssd/www/wlsearch
-sudo git clone https://github.com/alexevil1979/wlsearch.git /ssd/www/wlsearch
-cd /ssd/www/wlsearch
-cp .env.example .env   # заполнить вручную (chmod 600)
-# composer install  # опционально; есть встроенный autoload
+cd /ssd/www/wlsearch && git pull
 php8.2 bin/wlsearch migrate
+# cron: * * * * * php8.2 bin/wlsearch worker
 ```
-
-Apache DocumentRoot → `/ssd/www/wlsearch/public`, vhost `wlsearch.1tlt.ru`.
 
 ## CLI
 
 ```bash
-php bin/wlsearch migrate
-php bin/wlsearch health
-php bin/wlsearch worker          # cron каждую минуту (Phase 1+)
+php bin/wlsearch run --provider=timeweb --region=spb-3 --count=1
+php bin/wlsearch run --provider=selectel --region=ru-9a --count=1
+php bin/wlsearch worker
+php bin/wlsearch agent-token:create --name=phone-mts --operator=mts
 php bin/wlsearch inventory
+php bin/wlsearch destroy-failed
 ```
 
 ## Документация
 
-| Файл | Содержание |
-|------|------------|
-| [docs/DEPLOY.md](docs/DEPLOY.md) | Apache, MySQL 5.7, PHP 8.2, certbot |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Компоненты и state machine |
-| [docs/PROVIDERS.md](docs/PROVIDERS.md) | Timeweb / Selectel |
-| [docs/PHONE_AGENT.md](docs/PHONE_AGENT.md) | Termux agent |
-| [docs/RUNBOOK.md](docs/RUNBOOK.md) | Операции |
-| [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) | Угрозы и меры |
-
-## Лицензия
-
-Private / internal use.
+[DEPLOY](docs/DEPLOY.md) · [ARCHITECTURE](docs/ARCHITECTURE.md) · [PROVIDERS](docs/PROVIDERS.md) · [PHONE_AGENT](docs/PHONE_AGENT.md) · [RUNBOOK](docs/RUNBOOK.md) · [THREAT_MODEL](docs/THREAT_MODEL.md)

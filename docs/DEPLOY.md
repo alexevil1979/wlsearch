@@ -166,16 +166,13 @@ sudo systemctl reload php8.2-fpm
 
 ---
 
-## 9. Чеклист приёмки Phase 0–1
+## 9. Чеклист приёмки (все фазы)
 
-- [ ] DNS `wlsearch.1tlt.ru` указывает на VPS
-- [ ] HTTPS работает (certbot)
-- [ ] `/health` → JSON `status=ok` при живой БД
-- [ ] Login с `ADMIN_*` из `.env`
-- [ ] Dashboard открывается после входа
-- [ ] DocumentRoot не пересекается с rushvpn
-- [ ] `php8.2 bin/wlsearch migrate` без ошибок
-- [ ] В `.env`: `TIMEWEB_API_TOKEN`, `TIMEWEB_PRESET_ID`, `TIMEWEB_OS_ID`
-- [ ] Cron worker каждую минуту
-- [ ] Админка: Запуск → run появляется в Runs
-- [ ] Worker доводит до CONTROL_OK / BS_CHECK или FAIL_CONTROL → destroy
+- [ ] HTTPS `wlsearch.1tlt.ru`, DocumentRoot = `public/`
+- [ ] `/health` → ok, migrate OK, cron worker
+- [ ] Timeweb и/или Selectel в `.env`
+- [ ] Запуск run → CONTROL_OK → BS_CHECK
+- [ ] Agent token + Termux → PASS → Inventory
+- [ ] FAIL_BS → destroy (без keep)
+- [ ] Settings / blacklist / audit в админке
+- [ ] Apache передаёт `Authorization` (CGIPassAuth / SetEnvIf)

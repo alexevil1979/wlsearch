@@ -5,11 +5,16 @@ declare(strict_types=1);
 namespace Wlsearch\Http;
 
 use Wlsearch\Auth\AuthService;
+use Wlsearch\Http\Controllers\AgentController;
+use Wlsearch\Http\Controllers\AuditController;
 use Wlsearch\Http\Controllers\AuthController;
+use Wlsearch\Http\Controllers\BlacklistController;
 use Wlsearch\Http\Controllers\DashboardController;
+use Wlsearch\Http\Controllers\DevicesController;
 use Wlsearch\Http\Controllers\HealthController;
+use Wlsearch\Http\Controllers\InventoryController;
 use Wlsearch\Http\Controllers\RunsController;
-use Wlsearch\Http\Controllers\StubController;
+use Wlsearch\Http\Controllers\SettingsController;
 
 final class Kernel
 {
@@ -31,7 +36,12 @@ final class Kernel
         $auth = new AuthController();
         $dash = new DashboardController();
         $runs = new RunsController();
-        $stub = new StubController();
+        $inventory = new InventoryController();
+        $devices = new DevicesController();
+        $settings = new SettingsController();
+        $blacklist = new BlacklistController();
+        $audit = new AuditController();
+        $agent = new AgentController();
 
         $router->get('/health', [$health, 'index']);
 
@@ -57,15 +67,24 @@ final class Kernel
         $router->post('/runs/{id}/retry-control', [$runs, 'retryControl']);
         $router->post('/runs/{id}/retry-bs', [$runs, 'retryBs']);
 
-        $router->get('/inventory', [$stub, 'inventory']);
-        $router->get('/devices', [$stub, 'devices']);
-        $router->get('/settings', [$stub, 'settings']);
-        $router->get('/logs', [$stub, 'logs']);
-        $router->get('/blacklist', [$stub, 'blacklist']);
+        $router->get('/inventory', [$inventory, 'index']);
+        $router->post('/inventory/{id}/retire', [$inventory, 'retire']);
 
-        // Agent API placeholders (Phase 2)
-        $router->get('/api/v1/agent/tasks/next', [$stub, 'apiNotReady']);
-        $router->post('/api/v1/agent/tasks/{id}/result', [$stub, 'apiNotReady']);
-        $router->post('/api/v1/agent/heartbeat', [$stub, 'apiNotReady']);
+        $router->get('/devices', [$devices, 'index']);
+        $router->post('/devices', [$devices, 'create']);
+        $router->post('/devices/{id}/revoke', [$devices, 'revoke']);
+
+        $router->get('/settings', [$settings, 'index']);
+        $router->post('/settings', [$settings, 'save']);
+
+        $router->get('/logs', [$audit, 'index']);
+
+        $router->get('/blacklist', [$blacklist, 'index']);
+        $router->post('/blacklist', [$blacklist, 'create']);
+        $router->post('/blacklist/{id}/delete', [$blacklist, 'delete']);
+
+        $router->get('/api/v1/agent/tasks/next', [$agent, 'nextTask']);
+        $router->post('/api/v1/agent/tasks/{id}/result', [$agent, 'result']);
+        $router->post('/api/v1/agent/heartbeat', [$agent, 'heartbeat']);
     }
 }

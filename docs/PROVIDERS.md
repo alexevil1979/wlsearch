@@ -1,44 +1,33 @@
 # Providers
 
-Интерфейс адаптера (план): `create`, `destroy`, `get`, `list`.
+Интерфейс: `create`, `destroy`, `get`, `list`.  
+Токены **только** в `/ssd/www/wlsearch/.env` (chmod 600).
 
-Токены **только** в `/ssd/www/wlsearch/.env` (chmod 600), не в git и не в HTML.
+## Timeweb Cloud
 
-## Timeweb Cloud (P0) — реализовано в Phase 1
-
-- Base: `https://api.timeweb.cloud/api/v1` (`TIMEWEB_API_BASE`)
-- Auth: Bearer `TIMEWEB_API_TOKEN`
-- Create: `POST /servers` с `preset_id`, `os_id`, `availability_zone`, `cloud_init`
-- Get / List / Delete: `/servers`, `/servers/{id}`
+- Base: `TIMEWEB_API_BASE` (default `https://api.timeweb.cloud/api/v1`)
+- `TIMEWEB_API_TOKEN`, `TIMEWEB_PRESET_ID`, `TIMEWEB_OS_ID`, `TIMEWEB_AVAILABILITY_ZONE`
 - Docs: https://timeweb.cloud/api-docs
 
-### Обязательные env
+## Selectel OpenStack
 
-```
-TIMEWEB_API_TOKEN=...
-TIMEWEB_PRESET_ID=4795
-TIMEWEB_OS_ID=99
-TIMEWEB_AVAILABILITY_ZONE=spb-3
-TIMEWEB_BANDWIDTH=200
-```
+- Keystone: `SELECTEL_AUTH_URL` (например `https://cloud.api.selcloud.ru/identity/v3`)
+- `SELECTEL_USERNAME` / `SELECTEL_PASSWORD`
+- `SELECTEL_PROJECT_ID` **или** `SELECTEL_PROJECT_NAME`
+- `SELECTEL_USER_DOMAIN_NAME` / `SELECTEL_PROJECT_DOMAIN_NAME` (часто account id)
+- `SELECTEL_REGION` (AZ, например `ru-9a`)
+- `SELECTEL_FLAVOR_ID`, `SELECTEL_IMAGE_ID`, `SELECTEL_NETWORK_ID`
+- Опционально `SELECTEL_EXTERNAL_NET_ID` — выделить floating IP и привязать к порту
 
-Preset/OS ID зависят от аккаунта — возьмите из панели или `GET /presets` / `GET /os`.
+Создание: Nova `POST /servers` + `user_data` (cloud-init, base64).  
+Публичный IP: из `addresses` / floating IP; worker поллит до timeout.
 
-### Probe (cloud-init)
+Docs: https://docs.selectel.ru/cloud-servers/
 
-На кандидатном VPS ставится nginx :80, тело:
+## Probe
 
-`WL_PROBE_OK timeweb run_<id> <ip> <ts>`
+cloud-init → nginx :80 → `WL_PROBE_OK <provider> run_<id> <ip> <ts>`
 
-Control-check с оркестратора: `GET http://<ip>/` и поиск маркера `WL_PROBE_OK`.
+## ASN
 
-## Selectel OpenStack (P1)
-
-- Keystone + Nova credentials (`SELECTEL_*` в `.env`)
-- Docs: https://docs.selectel.ru/cloud-servers/
-- Публичный IP: poll floating IP до timeout
-- Тот же cloud-init probe
-
-## ASN lookup
-
-Best-effort (ipinfo / bgpview). Ошибка ASN не роняет run.
+Best-effort (ipinfo / bgpview). Ошибка ASN не роняет run. Blacklist ASN/prefix — в админке.

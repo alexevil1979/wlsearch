@@ -3,7 +3,7 @@
 use Wlsearch\Support\View;
 ?>
 <h1>Dashboard</h1>
-<p class="muted">Живые прогоны, очередь задач, агенты и лимиты. Phase 1: Timeweb create → control-check → BS_CHECK (агент в Phase 2).</p>
+<p class="muted">Полный цикл: create → control → BS (phone-agent) → PASS/inventory или FAIL/destroy.</p>
 
 <div class="grid" style="margin:1rem 0">
     <div class="stat">
