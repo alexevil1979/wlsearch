@@ -166,7 +166,7 @@ sudo systemctl reload php8.2-fpm
 
 ---
 
-## 9. Чеклист приёмки Phase 0
+## 9. Чеклист приёмки Phase 0–1
 
 - [ ] DNS `wlsearch.1tlt.ru` указывает на VPS
 - [ ] HTTPS работает (certbot)
@@ -175,3 +175,7 @@ sudo systemctl reload php8.2-fpm
 - [ ] Dashboard открывается после входа
 - [ ] DocumentRoot не пересекается с rushvpn
 - [ ] `php8.2 bin/wlsearch migrate` без ошибок
+- [ ] В `.env`: `TIMEWEB_API_TOKEN`, `TIMEWEB_PRESET_ID`, `TIMEWEB_OS_ID`
+- [ ] Cron worker каждую минуту
+- [ ] Админка: Запуск → run появляется в Runs
+- [ ] Worker доводит до CONTROL_OK / BS_CHECK или FAIL_CONTROL → destroy

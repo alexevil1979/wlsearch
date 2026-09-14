@@ -17,7 +17,7 @@ final class HealthController
             'app' => Env::get('APP_NAME', 'wlsearch'),
             'time' => gmdate('c'),
             'db' => $dbOk ? 'up' : 'down',
-            'phase' => 0,
+            'phase' => 1,
         ];
 
         http_response_code($dbOk ? 200 : 503);

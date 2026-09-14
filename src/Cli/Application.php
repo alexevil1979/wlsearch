@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace Wlsearch\Cli;
 
 use Wlsearch\Database\Migrator;
+use Wlsearch\Run\RunService;
 use Wlsearch\Support\Database;
 use Wlsearch\Support\Env;
+use Wlsearch\Worker\Worker;
 
 final class Application
 {
@@ -20,7 +22,7 @@ final class Application
                 'migrate' => $this->migrate(),
                 'worker' => $this->worker(),
                 'run' => $this->runCreate($args),
-                'destroy-failed' => $this->notReady('destroy-failed'),
+                'destroy-failed' => $this->destroyFailed(),
                 'inventory' => $this->inventory(),
                 'agent-token:create' => $this->notReady('agent-token:create'),
                 'health' => $this->health(),
@@ -36,13 +38,13 @@ final class Application
     private function help(): int
     {
         $text = <<<TXT
-wlsearch CLI (Phase 0)
+wlsearch CLI (Phase 1)
 
 Usage:
   php bin/wlsearch migrate
   php bin/wlsearch health
   php bin/wlsearch worker
-  php bin/wlsearch run --provider=timeweb --region=... --count=1
+  php bin/wlsearch run --provider=timeweb --region=spb-3 --count=1 [--keep-on-fail] [--comment=...]
   php bin/wlsearch destroy-failed
   php bin/wlsearch inventory
   php bin/wlsearch agent-token:create --name=phone-mts --operator=mts
@@ -61,22 +63,39 @@ TXT;
     {
         $pdo = Database::tryPdo();
         $db = $pdo ? 'up' : 'down';
-        fwrite(STDOUT, "app=" . (Env::get('APP_NAME', 'wlsearch') ?? 'wlsearch') . " db={$db} phase=0\n");
+        fwrite(STDOUT, "app=" . (Env::get('APP_NAME', 'wlsearch') ?? 'wlsearch') . " db={$db} phase=1\n");
         return $pdo ? 0 : 1;
     }
 
     private function worker(): int
     {
-        fwrite(STDOUT, '[' . date('c') . "] worker tick: no-op (Phase 0 stub)\n");
+        fwrite(STDOUT, '[' . date('c') . "] worker tick start\n");
+        $n = (new Worker())->tick();
+        fwrite(STDOUT, '[' . date('c') . "] worker tick done, processed={$n}\n");
         return 0;
     }
 
     /** @param list<string> $args */
     private function runCreate(array $args): int
     {
-        fwrite(STDERR, "run: not implemented until Phase 1 (Timeweb adapter)\n");
-        fwrite(STDERR, 'args: ' . implode(' ', $args) . "\n");
-        return 1;
+        $opts = $this->parseOpts($args);
+        $provider = (string) ($opts['provider'] ?? 'timeweb');
+        $region = isset($opts['region']) ? (string) $opts['region'] : null;
+        $count = isset($opts['count']) ? (int) $opts['count'] : 1;
+        $keep = array_key_exists('keep-on-fail', $opts) || array_key_exists('keep_on_fail', $opts);
+        $comment = isset($opts['comment']) ? (string) $opts['comment'] : null;
+
+        $ids = (new RunService())->createRuns($provider, $region, $count, $keep, $comment, 'cli');
+        fwrite(STDOUT, 'Created runs: #' . implode(', #', $ids) . "\n");
+        fwrite(STDOUT, "Run worker to advance state machine.\n");
+        return 0;
+    }
+
+    private function destroyFailed(): int
+    {
+        $n = (new RunService())->destroyFailed('cli');
+        fwrite(STDOUT, "Queued destroy for {$n} failed run(s)\n");
+        return 0;
     }
 
     private function inventory(): int
@@ -117,7 +136,7 @@ TXT;
 
     private function notReady(string $cmd): int
     {
-        fwrite(STDERR, "{$cmd}: not implemented in Phase 0\n");
+        fwrite(STDERR, "{$cmd}: not implemented until Phase 2\n");
         return 1;
     }
 
@@ -126,5 +145,27 @@ TXT;
         fwrite(STDERR, "Unknown command: {$command}\n");
         $this->help();
         return 1;
+    }
+
+    /**
+     * @param list<string> $args
+     * @return array<string, string|true>
+     */
+    private function parseOpts(array $args): array
+    {
+        $out = [];
+        foreach ($args as $arg) {
+            if (!str_starts_with($arg, '--')) {
+                continue;
+            }
+            $arg = substr($arg, 2);
+            if (str_contains($arg, '=')) {
+                [$k, $v] = explode('=', $arg, 2);
+                $out[$k] = $v;
+            } else {
+                $out[$arg] = true;
+            }
+        }
+        return $out;
     }
 }

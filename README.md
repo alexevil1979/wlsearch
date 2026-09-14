@@ -23,13 +23,19 @@ curl с Wi‑Fi / EU **не доказывает** БС-доступность.
 - Не трогает Laravel RushVPN / HiddifySales
 - После PASS — inventory + уведомления; превращение IP в VPN entry — вне этого репо
 
-## Phase 0 (текущий каркас)
+## Phase 1 (текущий)
+
+- Timeweb adapter: create / get / list / destroy + cloud-init probe
+- Worker state machine до `CONTROL_CHECK` → `BS_CHECK`
+- Админка: форма запуска, таблица Runs, destroy / keep / retry
+- Лимиты `MAX_PARALLEL_VMS` / `MAX_CREATES_PER_DAY` / spend
+- Telegram notify (опционально)
+- CLI: `run`, `worker`, `destroy-failed`
+
+## Phase 0
 
 - Login / session auth (CSRF, rate-limit)
-- Dashboard-заглушка со счётчиками
-- `/health` JSON
-- Миграции таблиц (`php bin/wlsearch migrate`)
-- CLI stubs + docs под Apache/PHP8.2/MySQL5.7
+- Dashboard, `/health`, миграции, deploy docs
 
 ## Быстрый старт (VPS)
 

@@ -10,16 +10,6 @@ use Wlsearch\Support\View;
 
 final class StubController
 {
-    public function runs(): void
-    {
-        $this->page('runs', 'Runs', 'Список прогонов появится в Phase 1 (Timeweb + state machine).');
-    }
-
-    public function runNew(): void
-    {
-        $this->page('runs', 'Запуск прогона', 'Форма запуска (provider / region / count / keep_on_fail) — Phase 1.');
-    }
-
     public function inventory(): void
     {
         $this->page('inventory', 'Inventory PASS', 'Белые IP появятся после полного цикла BS-проверки (Phase 2).');
@@ -32,12 +22,12 @@ final class StubController
 
     public function settings(): void
     {
-        $this->page('settings', 'Лимиты и настройки', 'Редактирование лимитов и Telegram chat — Phase 4 (сейчас значения из .env).');
+        $this->page('settings', 'Лимиты и настройки', 'Редактирование лимитов и Telegram chat — Phase 4 (сейчас значения из .env / settings).');
     }
 
     public function logs(): void
     {
-        $this->page('logs', 'Логи / audit', 'Audit log действий оператора — Phase 4.');
+        $this->page('logs', 'Логи / audit', 'Audit уже пишется в БД (run.create / destroy / keep). UI — Phase 4.');
     }
 
     public function blacklist(): void
@@ -52,7 +42,7 @@ final class StubController
         echo json_encode([
             'error' => 'not_implemented',
             'message' => 'Agent API будет в Phase 2',
-            'phase' => 0,
+            'phase' => 1,
         ], JSON_UNESCAPED_UNICODE);
     }
 

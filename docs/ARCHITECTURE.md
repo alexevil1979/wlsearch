@@ -41,7 +41,19 @@ MySQL 5.7: без CTE / window-зависимостей; JSON как TEXT при
 | Phase | Содержание |
 |-------|------------|
 | 0 | Skeleton, login, migrate, /health, deploy docs |
-| 1 | Timeweb + control + UI runs |
+| 1 | Timeweb + control + UI runs + worker + Telegram |
 | 2 | Phone agent + full loop + inventory |
 | 3 | Selectel |
 | 4 | Blacklist, multi-device, limits UI, audit |
+
+## Worker tick
+
+Cron: `* * * * * php8.2 bin/wlsearch worker`
+
+За один тик обрабатывает до 50 run в активных состояниях:
+
+- `ORDERING` → Timeweb create + cloud-init
+- `PROVISIONING` → poll IP/status + ASN
+- `BOOTSTRAPPING` → ждёт ответ probe
+- `CONTROL_CHECK` → маркер `WL_PROBE_OK` → `BS_CHECK`
+- `FAIL_*` без keep → `DESTROYING` → API delete → `DESTROYED`

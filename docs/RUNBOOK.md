@@ -22,8 +22,11 @@ tail -n 100 /ssd/www/wlsearch/storage/logs/worker.log
 Админка → «Запуск» или:
 
 ```bash
-php8.2 bin/wlsearch run --provider=timeweb --region=ru-1 --count=1
+php8.2 bin/wlsearch run --provider=timeweb --region=spb-3 --count=1
+php8.2 bin/wlsearch worker
 ```
+
+Убедитесь, что в `.env` заданы `TIMEWEB_API_TOKEN`, `TIMEWEB_PRESET_ID`, `TIMEWEB_OS_ID`.
 
 ### Destroy failed
 
