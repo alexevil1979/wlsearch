@@ -23,7 +23,8 @@ VLESS/Xray/WG/RushVPN/Hiddify — вне репо. После PASS IP испол
 
 ## Деплой
 
-См. [docs/DEPLOY.md](docs/DEPLOY.md)
+**Установка на VPS с нуля:** [docs/INSTALL_VPS.md](docs/INSTALL_VPS.md)  
+Кратко: [docs/DEPLOY.md](docs/DEPLOY.md)
 
 ```bash
 cd /ssd/www/wlsearch && git pull
@@ -44,4 +45,4 @@ php bin/wlsearch destroy-failed
 
 ## Документация
 
-[DEPLOY](docs/DEPLOY.md) · [ARCHITECTURE](docs/ARCHITECTURE.md) · [PROVIDERS](docs/PROVIDERS.md) · [PHONE_AGENT](docs/PHONE_AGENT.md) · [RUNBOOK](docs/RUNBOOK.md) · [THREAT_MODEL](docs/THREAT_MODEL.md)
+[INSTALL_VPS](docs/INSTALL_VPS.md) · [DEPLOY](docs/DEPLOY.md) · [ARCHITECTURE](docs/ARCHITECTURE.md) · [PROVIDERS](docs/PROVIDERS.md) · [PHONE_AGENT](docs/PHONE_AGENT.md) · [RUNBOOK](docs/RUNBOOK.md) · [THREAT_MODEL](docs/THREAT_MODEL.md)
