@@ -422,7 +422,7 @@ sudo ufw enable
 ```bash
 cd /ssd/www/wlsearch
 sudo -u www-data git pull origin main
-sudo -u www-data php8.2 bin/wlsearch migrate
+sudo -u www-data ./bin/wlsearch-run migrate
 sudo systemctl reload php8.2-fpm
 ```
 
