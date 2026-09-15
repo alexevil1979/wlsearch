@@ -73,20 +73,26 @@ final class HttpClient
      * Plain GET (for control probe).
      * @return array{status:int, body:string, error:?string}
      */
-    public function getPlain(string $url, int $timeout = 10): array
+    public function getPlain(string $url, int $timeout = 10, bool $insecureSsl = false): array
     {
         $ch = curl_init($url);
         if ($ch === false) {
             return ['status' => 0, 'body' => '', 'error' => 'curl_init failed'];
         }
-        curl_setopt_array($ch, [
+        $opts = [
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_TIMEOUT => $timeout,
             CURLOPT_CONNECTTIMEOUT => min(5, $timeout),
             CURLOPT_FOLLOWLOCATION => true,
             CURLOPT_MAXREDIRS => 2,
             CURLOPT_USERAGENT => 'wlsearch-control-check/1.0',
-        ]);
+        ];
+        if ($insecureSsl || str_starts_with(strtolower($url), 'https://')) {
+            // Probe VPS uses self-signed cert
+            $opts[CURLOPT_SSL_VERIFYPEER] = false;
+            $opts[CURLOPT_SSL_VERIFYHOST] = 0;
+        }
+        curl_setopt_array($ch, $opts);
         $body = curl_exec($ch);
         $error = curl_error($ch);
         $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);

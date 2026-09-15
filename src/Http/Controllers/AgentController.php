@@ -40,7 +40,10 @@ final class AgentController
                 'forbid_wifi' => true,
                 'forbid_vpn' => true,
                 'method' => 'GET',
-                'url' => 'http://' . $task['target_ipv4'] . '/',
+                'url' => 'https://' . $task['target_ipv4'] . '/',
+                'url_http' => 'http://' . $task['target_ipv4'] . '/',
+                'tcp_port' => 443,
+                'tls_insecure' => true,
             ],
         ]);
     }

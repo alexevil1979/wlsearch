@@ -91,7 +91,7 @@ PY
     continue
   fi
 
-  echo "task #$TASK_ID → http://$IP/"
+  echo "task #$TASK_ID → https://$IP/ (and http)"
 
   WIFI=false; VPN=false; CELL=false
   is_wifi && WIFI=true
@@ -99,8 +99,12 @@ PY
   is_cellular && CELL=true
 
   BODY_FILE=/tmp/wlsearch_body.txt
-  HTTP_CODE=$(curl -sS -o "$BODY_FILE" -w "%{http_code}" --connect-timeout 8 --max-time 15 \
-    "http://${IP}/" || echo "000")
+  HTTP_CODE=$(curl -skS -o "$BODY_FILE" -w "%{http_code}" --connect-timeout 8 --max-time 15 \
+    "https://${IP}/" || echo "000")
+  if [ "$HTTP_CODE" = "000" ] || [ "$HTTP_CODE" = "000000" ]; then
+    HTTP_CODE=$(curl -sS -o "$BODY_FILE" -w "%{http_code}" --connect-timeout 8 --max-time 15 \
+      "http://${IP}/" || echo "000")
+  fi
   BODY=$(head -c 800 "$BODY_FILE" 2>/dev/null || true)
   MARKER_OK=false
   echo "$BODY" | grep -Fq "$MARKER" && MARKER_OK=true

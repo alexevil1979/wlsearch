@@ -31,7 +31,7 @@ Docs: https://docs.selectel.ru/cloud-servers/
 
 ## Probe
 
-cloud-init → nginx :80 → `WL_PROBE_OK <provider> run_<id> <ip> <ts>`
+cloud-init → nginx **:80 + :443** (self-signed) → `WL_PROBE_OK <provider> run_<id> <ip> <ts>`
 
 ## ASN
 

@@ -21,7 +21,15 @@
 GET  /v1/operators?dpi=on
 POST /v1/probe
 Authorization: Bearer bsk_live_…
-{ "target":"http://IP/", "dpi":"on", "operators":["…|on"], "tcp_port":80, "probes":{"tcp":true} }
+{ "target":"http://IP/", "dpi":"on", "operators":["…|on"], "tcp_port":80, "probes":{"tcp":true,"http":true,"icmp":false} }
 ```
 
-PASS: `control_ok` ∧ ≥ `BSBORD_MIN_PASS` операторов БС с TCP/HTTP ok.
+wlsearch дергает **HTTP :80 и HTTPS :443** отдельно (только `dpi=on`).
+
+**PASS** (строго, как зелёные точки в UI):
+- TCP `ok` / `alive`
+- HTTP status 2xx
+- в теле есть `WL_PROBE_OK`
+- ≥ `BSBORD_MIN_PASS` операторов **БС**
+
+Не засчитываем: ICMP, каналы «без БС», голый `leg.ok` без TCP/HTTP.
