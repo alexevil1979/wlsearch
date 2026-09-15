@@ -2,15 +2,18 @@
 /** @var string $csrf */
 /** @var bool $timewebConfigured */
 /** @var bool $selectelConfigured */
+/** @var bool $bsbordConfigured */
 /** @var string|null $defaultRegion */
 /** @var string|null $defaultSelectelRegion */
+/** @var string|null $defaultBsMode */
 /** @var int $maxParallel */
 /** @var int $maxCreates */
 use Wlsearch\Support\View;
 $anyProvider = $timewebConfigured || $selectelConfigured;
+$bsDefault = $defaultBsMode ?: 'agent';
 ?>
 <h1>Запуск прогона</h1>
-<p class="muted">Создаёт run(s) → worker → control → BS-задача для phone-agent.</p>
+<p class="muted">create → control → BS-проверка (Android SIM и/или bsbord.com).</p>
 
 <?php if (!$anyProvider): ?>
     <div class="flash flash-error">Ни один провайдер не настроен в .env.</div>
@@ -30,6 +33,18 @@ $anyProvider = $timewebConfigured || $selectelConfigured;
         <input id="region" name="region" type="text"
                value="<?= View::e((string) ($timewebConfigured ? $defaultRegion : $defaultSelectelRegion)) ?>"
                placeholder="spb-3 или ru-9a">
+
+        <label for="bs_mode">BS-проверка</label>
+        <select id="bs_mode" name="bs_mode" required>
+            <option value="agent" <?= $bsDefault === 'agent' ? 'selected' : '' ?>>Android SIM (Termux agent)</option>
+            <option value="bsbord" <?= $bsDefault === 'bsbord' ? 'selected' : '' ?> <?= $bsbordConfigured ? '' : 'disabled' ?>>
+                bsbord.com API <?= $bsbordConfigured ? '' : '(нужен BSBORD_API_TOKEN)' ?>
+            </option>
+            <option value="both" <?= $bsDefault === 'both' ? 'selected' : '' ?> <?= $bsbordConfigured ? '' : 'disabled' ?>>
+                both — bsbord или agent (PASS при любом)
+            </option>
+        </select>
+        <p class="muted">bsbord: мобильные каналы с dpi=on через https://bsbord.com/v1/probe</p>
 
         <label for="count">Count</label>
         <input id="count" name="count" type="number" min="1" max="20" value="1" required>

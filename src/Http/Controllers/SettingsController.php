@@ -23,6 +23,9 @@ final class SettingsController
         'PROVISION_TIMEOUT_SEC',
         'BOOTSTRAP_TIMEOUT_SEC',
         'CONTROL_CHECK_TIMEOUT_SEC',
+        'BSBORD_API_TOKEN',
+        'BSBORD_OPERATORS',
+        'BS_MODE_DEFAULT',
     ];
 
     public function index(): void

@@ -44,6 +44,9 @@ final class RunsController
             'defaultSelectelRegion' => Env::get('SELECTEL_REGION', 'ru-9a'),
             'maxParallel' => Settings::int('MAX_PARALLEL_VMS', 3),
             'maxCreates' => Settings::int('MAX_CREATES_PER_DAY', 20),
+            'bsbordConfigured' => (Env::get('BSBORD_API_TOKEN', '') ?? '') !== ''
+                || (Settings::get('BSBORD_API_TOKEN', '') ?? '') !== '',
+            'defaultBsMode' => Env::get('BS_MODE_DEFAULT', 'agent'),
         ]);
     }
 
@@ -61,6 +64,7 @@ final class RunsController
         $count = (int) ($_POST['count'] ?? 1);
         $keepOnFail = !empty($_POST['keep_on_fail']);
         $comment = trim((string) ($_POST['comment'] ?? ''));
+        $bsMode = strtolower(trim((string) ($_POST['bs_mode'] ?? 'agent')));
         $actor = (string) (AuthService::user()['login'] ?? 'admin');
 
         try {
@@ -71,6 +75,7 @@ final class RunsController
                 $keepOnFail,
                 $comment !== '' ? $comment : null,
                 $actor,
+                $bsMode,
             );
             Flash::set('ok', 'Создано run: #' . implode(', #', $ids) . '. Worker подхватит в течение минуты.');
             header('Location: /runs');

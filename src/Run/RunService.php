@@ -40,6 +40,7 @@ final class RunService
         bool $keepOnFail,
         ?string $comment,
         string $actor,
+        string $bsMode = 'agent',
     ): array {
         $provider = strtolower($provider);
         if (!in_array($provider, ['timeweb', 'selectel'], true)) {
@@ -49,13 +50,24 @@ final class RunService
             throw new \RuntimeException('Провайдер не настроен (проверьте .env)');
         }
 
+        $bsMode = strtolower($bsMode);
+        if (!in_array($bsMode, ['agent', 'bsbord', 'both'], true)) {
+            throw new \InvalidArgumentException('bs_mode: agent|bsbord|both');
+        }
+        if (in_array($bsMode, ['bsbord', 'both'], true)) {
+            $token = \Wlsearch\Support\Settings::get('BSBORD_API_TOKEN', \Wlsearch\Support\Env::get('BSBORD_API_TOKEN', ''));
+            if ($token === null || $token === '') {
+                throw new \RuntimeException('Для bs_mode=' . $bsMode . ' нужен BSBORD_API_TOKEN в .env');
+            }
+        }
+
         $count = max(1, min(20, $count));
         $this->assertCanCreate($count, $provider);
 
         $ids = [];
         $stmt = $this->pdo->prepare(
-            'INSERT INTO runs (provider, region, state, keep_on_fail, comment, created_by, created_at, updated_at)
-             VALUES (?, ?, \'ORDERING\', ?, ?, ?, NOW(), NOW())'
+            'INSERT INTO runs (provider, region, state, keep_on_fail, bs_mode, comment, created_by, created_at, updated_at)
+             VALUES (?, ?, \'ORDERING\', ?, ?, ?, ?, NOW(), NOW())'
         );
 
         for ($i = 0; $i < $count; $i++) {
@@ -63,6 +75,7 @@ final class RunService
                 $provider,
                 $region !== null && $region !== '' ? $region : null,
                 $keepOnFail ? 1 : 0,
+                $bsMode,
                 $comment !== null && $comment !== '' ? mb_substr($comment, 0, 255) : null,
                 mb_substr($actor, 0, 64),
             ]);
@@ -72,14 +85,16 @@ final class RunService
                 'provider' => $provider,
                 'region' => $region,
                 'keep_on_fail' => $keepOnFail,
+                'bs_mode' => $bsMode,
             ]);
         }
 
         $this->tg->send(sprintf(
-            "wlsearch: создано run×%d provider=%s region=%s ids=%s",
+            "wlsearch: создано run×%d provider=%s region=%s bs=%s ids=%s",
             count($ids),
             $provider,
             $region ?: '-',
+            $bsMode,
             implode(',', $ids)
         ));
 

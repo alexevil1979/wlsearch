@@ -19,6 +19,9 @@ use Wlsearch\Support\View;
             'PROVISION_TIMEOUT_SEC' => 'Timeout provision (сек)',
             'BOOTSTRAP_TIMEOUT_SEC' => 'Timeout bootstrap (сек)',
             'CONTROL_CHECK_TIMEOUT_SEC' => 'Timeout control (сек)',
+            'BSBORD_API_TOKEN' => 'bsbord API token (bsk_live_…)',
+            'BSBORD_OPERATORS' => 'bsbord operators filter (пусто = все dpi=on)',
+            'BS_MODE_DEFAULT' => 'Дефолт BS: agent|bsbord|both',
         ];
         foreach ($labels as $key => $label):
         ?>

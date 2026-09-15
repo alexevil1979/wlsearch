@@ -45,4 +45,4 @@ php bin/wlsearch destroy-failed
 
 ## Документация
 
-[INSTALL_VPS](docs/INSTALL_VPS.md) · [DEPLOY](docs/DEPLOY.md) · [ARCHITECTURE](docs/ARCHITECTURE.md) · [PROVIDERS](docs/PROVIDERS.md) · [PHONE_AGENT](docs/PHONE_AGENT.md) · [RUNBOOK](docs/RUNBOOK.md) · [THREAT_MODEL](docs/THREAT_MODEL.md)
+[INSTALL_VPS](docs/INSTALL_VPS.md) · [DEPLOY](docs/DEPLOY.md) · [ARCHITECTURE](docs/ARCHITECTURE.md) · [PROVIDERS](docs/PROVIDERS.md) · [PHONE_AGENT](docs/PHONE_AGENT.md) · [BSBORD](docs/BSBORD.md) · [RUNBOOK](docs/RUNBOOK.md) · [THREAT_MODEL](docs/THREAT_MODEL.md)

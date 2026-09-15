@@ -45,7 +45,7 @@ Usage:
   php bin/wlsearch migrate
   php bin/wlsearch health
   php bin/wlsearch worker
-  php bin/wlsearch run --provider=timeweb|selectel --region=... --count=1 [--keep-on-fail]
+  php bin/wlsearch run --provider=timeweb|selectel --region=... --count=1 [--bs-mode=agent|bsbord|both] [--keep-on-fail]
   php bin/wlsearch destroy-failed
   php bin/wlsearch inventory
   php bin/wlsearch agent-token:create --name=phone-mts --operator=mts
@@ -85,8 +85,9 @@ TXT;
         $count = isset($opts['count']) ? (int) $opts['count'] : 1;
         $keep = array_key_exists('keep-on-fail', $opts) || array_key_exists('keep_on_fail', $opts);
         $comment = isset($opts['comment']) ? (string) $opts['comment'] : null;
+        $bsMode = isset($opts['bs-mode']) ? (string) $opts['bs-mode'] : (isset($opts['bs_mode']) ? (string) $opts['bs_mode'] : 'agent');
 
-        $ids = (new RunService())->createRuns($provider, $region, $count, $keep, $comment, 'cli');
+        $ids = (new RunService())->createRuns($provider, $region, $count, $keep, $comment, 'cli', $bsMode);
         fwrite(STDOUT, 'Created runs: #' . implode(', #', $ids) . "\n");
         return 0;
     }

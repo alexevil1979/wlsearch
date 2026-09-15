@@ -28,6 +28,7 @@ $badgeClass = static function (string $state): string {
             <tr>
                 <th>ID</th>
                 <th>State</th>
+                <th>BS</th>
                 <th>Provider</th>
                 <th>IP</th>
                 <th>ASN</th>
@@ -50,6 +51,12 @@ $badgeClass = static function (string $state): string {
                 <tr>
                     <td>#<?= $id ?></td>
                     <td><span class="badge <?= $badgeClass($state) ?>"><?= View::e($state) ?></span></td>
+                    <td class="muted">
+                        <?= View::e((string) ($r['bs_mode'] ?? 'agent')) ?>
+                        <?php if (!empty($r['bs_source'])): ?>
+                            <br><span class="badge badge-ok"><?= View::e((string) $r['bs_source']) ?></span>
+                        <?php endif; ?>
+                    </td>
                     <td><?= View::e((string) $r['provider']) ?><?php if ($r['region']): ?><br><span class="muted"><?= View::e((string) $r['region']) ?></span><?php endif; ?></td>
                     <td>
                         <?php if (!empty($r['ipv4'])): ?>

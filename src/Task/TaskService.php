@@ -139,7 +139,7 @@ final class TaskService
 
         if ($bsOk && $controlOk && $cellular) {
             $this->pdo->prepare(
-                "UPDATE runs SET bs_ok = 1, cellular_ok = 1, state = 'PASS', verdict = 'PASS',
+                "UPDATE runs SET bs_ok = 1, cellular_ok = 1, bs_source = 'agent', state = 'PASS', verdict = 'PASS',
                         error_message = NULL, updated_at = NOW() WHERE id = ?"
             )->execute([$runId]);
 
@@ -152,7 +152,7 @@ final class TaskService
                 $operator,
             );
 
-            $this->tg->send("wlsearch: PASS run #{$runId} ip={$run['ipv4']} operator={$operator}");
+            $this->tg->send("wlsearch: PASS (agent) run #{$runId} ip={$run['ipv4']} operator={$operator}");
             Audit::log('device:' . $deviceId, 'run.pass', 'run', (string) $runId, ['operator' => $operator]);
             return;
         }
