@@ -435,6 +435,7 @@ sudo systemctl reload php8.2-fpm
 
 | Симптом | Что проверить |
 |---------|----------------|
+| `/health` → HTML **301 Moved** | Это редирект HTTP→HTTPS. Проверяйте так: `curl -sSL https://wlsearch.1tlt.ru/health` (с `-L`). Без `-L` curl показывает HTML редиректа. |
 | `There is no active transaction` на migrate | Исправлено в коде (DDL MySQL). `git pull` и снова `./bin/wlsearch-run migrate` |
 | `db=down` в `/health` | MySQL up, `DB_*`, grants, `127.0.0.1` vs `localhost` (socket) |
 | 404 Apache | DocumentRoot = `.../public`, site enabled, DNS |
@@ -444,6 +445,22 @@ sudo systemctl reload php8.2-fpm
 | Create Timeweb fail | token, preset/os id, лимиты, баланс облака |
 | Selectel без IP | `SELECTEL_EXTERNAL_NET_ID` + network id |
 | Worker молчит | crontab www-data, `wlsearch-run` / `-d open_basedir=`, права на `storage/logs` |
+
+### curl отдаёт 301 HTML вместо JSON
+
+Certbot обычно вешает на `:80` редирект на HTTPS. Ответ с `Port 80` / `301 Moved` — это как раз он (или запрос ушёл на HTTP).
+
+```bash
+curl -sSI http://wlsearch.1tlt.ru/health
+curl -sSI https://wlsearch.1tlt.ru/health
+
+# нужная проверка:
+curl -sSL https://wlsearch.1tlt.ru/health
+# {"status":"ok","db":"up",...}
+
+curl -sSLk https://127.0.0.1/health -H 'Host: wlsearch.1tlt.ru'
+sudo apache2ctl -S | grep -i wlsearch
+```
 
 ### open_basedir (частый кейс на servv)
 
