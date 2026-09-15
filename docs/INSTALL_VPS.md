@@ -289,7 +289,8 @@ sudo systemctl reload apache2
 Важно в conf:
 
 - `DocumentRoot /ssd/www/wlsearch/public`
-- `CGIPassAuth On` + `SetEnvIf Authorization` — иначе phone-agent Bearer не дойдёт до PHP
+- `SetEnvIf Authorization` в vhost + rewrite в `public/.htaccess` — иначе phone-agent Bearer не дойдёт до PHP
+- **не** ставить `CGIPassAuth` в `<VirtualHost>` (на части сборок Apache — syntax error)
 - сайт **не** должен шарить root с RushVPN
 
 Проверка HTTP (до SSL):
@@ -318,7 +319,7 @@ sudo systemctl reload apache2
 
 - DocumentRoot → `/ssd/www/wlsearch/public`
 - handler `php8.2-fpm`
-- `CGIPassAuth` / `SetEnvIf Authorization`
+- `SetEnvIf Authorization` (без `CGIPassAuth`)
 
 Проверка:
 
@@ -439,7 +440,7 @@ sudo systemctl reload php8.2-fpm
 | 404 Apache | DocumentRoot = `.../public`, site enabled, DNS |
 | Белый экран PHP | `storage/logs`, `php8.2-fpm` status, `error.log` Apache |
 | Certbot fail | DNS A, порт 80, нет чужого vhost на том же имени |
-| Agent 401 | token, `CGIPassAuth` / Authorization в Apache |
+| Agent 401 | token; `SetEnvIf Authorization` / `.htaccess` HTTP_AUTHORIZATION; не использовать CGIPassAuth в VirtualHost |
 | Create Timeweb fail | token, preset/os id, лимиты, баланс облака |
 | Selectel без IP | `SELECTEL_EXTERNAL_NET_ID` + network id |
 | Worker молчит | crontab www-data, `wlsearch-run` / `-d open_basedir=`, права на `storage/logs` |

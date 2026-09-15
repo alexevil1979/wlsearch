@@ -1,5 +1,9 @@
 RewriteEngine On
 
+# Pass Authorization to PHP-FPM (Apache often strips it otherwise)
+RewriteCond %{HTTP:Authorization} .
+RewriteRule ^ - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
 # Deny access to hidden files
 RewriteRule (^|/)\. - [F]
 

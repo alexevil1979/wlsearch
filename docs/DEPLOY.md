@@ -31,7 +31,7 @@ sudo systemctl reload php8.2-fpm
 ## Vhost
 
 Файл: `deploy/apache-wlsearch.1tlt.ru.conf`  
-Обязательно: `CGIPassAuth` + передача `Authorization` для phone-agent.
+Обязательно: передача `Authorization` через `SetEnvIf` + `public/.htaccess` (без `CGIPassAuth` в VirtualHost).
 
 ## Cron
 
