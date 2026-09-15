@@ -63,6 +63,16 @@ final class TimewebProvider implements ProviderInterface
             $body['project_id'] = $projectId;
         }
 
+        if ($this->ensureIpv4()) {
+            $floatingId = Env::get('TIMEWEB_FLOATING_IP_ID', '') ?? '';
+            if ($floatingId === '') {
+                $floatingId = $this->createFloatingIp((string) ($zone ?? Env::get('TIMEWEB_AVAILABILITY_ZONE', 'spb-3')));
+            }
+            if ($floatingId !== '') {
+                $body['network'] = ['floating_ip' => $floatingId];
+            }
+        }
+
         $resp = $this->http->request('POST', $this->base . '/servers', $body);
         if ($resp['status'] < 200 || $resp['status'] >= 300) {
             throw new \RuntimeException('Timeweb create failed HTTP ' . $resp['status'] . ': ' . $resp['body']);
@@ -96,6 +106,22 @@ final class TimewebProvider implements ProviderInterface
             $ip = $this->fetchIpv4FromIpsEndpoint($serverId);
             if ($ip !== null) {
                 return new ServerInfo($info->id, $ip, $info->status, $info->raw);
+            }
+        }
+
+        if (($info->ipv4 === null || $info->ipv4 === '') && $this->ensureIpv4() && $this->shouldOrderIpv4($info->status)) {
+            $zone = $this->zoneFromServer($info->raw);
+            $this->attachIpv4IfMissing($serverId, $zone);
+            $ip = $this->fetchIpv4FromIpsEndpoint($serverId);
+            if ($ip !== null) {
+                return new ServerInfo($info->id, $ip, $info->status, $info->raw);
+            }
+            $retry = $this->http->request('GET', $this->base . '/servers/' . rawurlencode($serverId));
+            if ($retry['status'] >= 200 && $retry['status'] < 300) {
+                $json = json_decode($retry['body'], true);
+                if (is_array($json)) {
+                    return $this->mapServer($json['server'] ?? $json);
+                }
             }
         }
 
@@ -224,31 +250,150 @@ final class TimewebProvider implements ProviderInterface
 
     private function fetchIpv4FromIpsEndpoint(string $serverId): ?string
     {
+        foreach ($this->fetchIpsList($serverId) as $row) {
+            $ip = (string) ($row['ip'] ?? '');
+            $type = strtolower((string) ($row['type'] ?? 'ipv4'));
+            if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)
+                && ($type === '' || $type === 'ipv4' || str_contains($type, 'public'))
+            ) {
+                return $ip;
+            }
+        }
+        return null;
+    }
+
+    private function ensureIpv4(): bool
+    {
+        return Env::bool('TIMEWEB_ENSURE_IPV4', true);
+    }
+
+    /** @param array<string, mixed> $server */
+    private function zoneFromServer(array $server): string
+    {
+        $zone = (string) ($server['availability_zone'] ?? $server['location'] ?? '');
+        if ($zone !== '') {
+            return $zone;
+        }
+        return Env::get('TIMEWEB_AVAILABILITY_ZONE', 'spb-3') ?? 'spb-3';
+    }
+
+    private function createFloatingIp(string $zone): string
+    {
+        $resp = $this->http->request('POST', $this->base . '/floating-ips', [
+            'availability_zone' => $zone,
+            'is_ddos_guard' => false,
+            'comment' => 'wlsearch',
+        ]);
+        if ($resp['status'] < 200 || $resp['status'] >= 300) {
+            throw new \RuntimeException('Timeweb floating IP create failed HTTP ' . $resp['status'] . ': ' . $resp['body']);
+        }
+        $json = json_decode($resp['body'], true);
+        if (!is_array($json)) {
+            throw new \RuntimeException('Timeweb floating IP: invalid JSON');
+        }
+        $fip = $json['ip'] ?? $json['floating_ip'] ?? $json;
+        if (is_array($fip)) {
+            $id = (string) ($fip['id'] ?? '');
+            if ($id !== '') {
+                return $id;
+            }
+        }
+        throw new \RuntimeException('Timeweb floating IP: missing id in response');
+    }
+
+    private function shouldOrderIpv4(string $status): bool
+    {
+        $s = strtolower(trim($status));
+        if (in_array($s, ['installing', 'turning_on', 'creating', 'unknown', ''], true)) {
+            return false;
+        }
+        return true;
+    }
+
+    private function attachIpv4IfMissing(string $serverId, string $zone): void
+    {
+        if ($this->fetchIpv4FromIpsEndpoint($serverId) !== null) {
+            return;
+        }
+        if ($this->hasFloatingIpForServer($serverId)) {
+            return;
+        }
+
+        $resp = $this->http->request(
+            'POST',
+            $this->base . '/servers/' . rawurlencode($serverId) . '/ips',
+            ['type' => 'ipv4']
+        );
+        if ($resp['status'] >= 200 && $resp['status'] < 300) {
+            return;
+        }
+
+        $fipId = $this->createFloatingIp($zone);
+        $bind = $this->http->request(
+            'POST',
+            $this->base . '/floating-ips/' . rawurlencode($fipId) . '/bind',
+            [
+                'resource_type' => 'server',
+                'resource_id' => is_numeric($serverId) ? (int) $serverId : $serverId,
+            ]
+        );
+        if ($bind['status'] < 200 || $bind['status'] >= 300) {
+            throw new \RuntimeException(
+                'Timeweb bind floating IP failed HTTP ' . $bind['status'] . ': ' . $bind['body']
+            );
+        }
+    }
+
+    private function hasFloatingIpForServer(string $serverId): bool
+    {
+        try {
+            $resp = $this->http->request('GET', $this->base . '/floating-ips');
+            if ($resp['status'] < 200 || $resp['status'] >= 300) {
+                return false;
+            }
+            $json = json_decode($resp['body'], true);
+            $list = $json['ips'] ?? $json['floating_ips'] ?? $json;
+            if (!is_array($list)) {
+                return false;
+            }
+            foreach ($list as $row) {
+                if (!is_array($row)) {
+                    continue;
+                }
+                $rid = (string) ($row['resource_id'] ?? '');
+                $rtype = strtolower((string) ($row['resource_type'] ?? ''));
+                if ($rid !== '' && $rid === $serverId && ($rtype === '' || $rtype === 'server')) {
+                    return true;
+                }
+            }
+        } catch (\Throwable) {
+            return false;
+        }
+        return false;
+    }
+
+    /** @return list<array<string, mixed>> */
+    private function fetchIpsList(string $serverId): array
+    {
         try {
             $resp = $this->http->request('GET', $this->base . '/servers/' . rawurlencode($serverId) . '/ips');
             if ($resp['status'] < 200 || $resp['status'] >= 300) {
-                return null;
+                return [];
             }
             $json = json_decode($resp['body'], true);
             $ips = $json['server_ips'] ?? $json['ips'] ?? $json;
             if (!is_array($ips)) {
-                return null;
+                return [];
             }
+            $out = [];
             foreach ($ips as $row) {
-                if (!is_array($row)) {
-                    continue;
-                }
-                $ip = (string) ($row['ip'] ?? '');
-                $type = strtolower((string) ($row['type'] ?? 'ipv4'));
-                if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)
-                    && ($type === '' || $type === 'ipv4' || str_contains($type, 'public'))
-                ) {
-                    return $ip;
+                if (is_array($row)) {
+                    $out[] = $row;
                 }
             }
+            return $out;
         } catch (\Throwable) {
-            return null;
+            return [];
         }
-        return null;
     }
 }
