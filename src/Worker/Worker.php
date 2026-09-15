@@ -185,13 +185,25 @@ final class Worker
 
         if ($info->isReady()) {
             $this->setState($id, 'BOOTSTRAPPING');
-            fwrite(STDOUT, "run #{$id}: IP {$info->ipv4} ready → BOOTSTRAPPING\n");
+            fwrite(STDOUT, "run #{$id}: IP {$info->ipv4} status={$info->status} → BOOTSTRAPPING\n");
             return;
         }
 
+        fwrite(STDOUT, sprintf(
+            "run #%d: provisioning wait server=%s status=%s ip=%s\n",
+            $id,
+            $serverId,
+            $info->status,
+            $info->ipv4 ?: '-'
+        ));
+
         $timeout = Settings::int('PROVISION_TIMEOUT_SEC', Env::int('PROVISION_TIMEOUT_SEC', 900));
         if ($this->updatedAgeSeconds($run) > $timeout) {
-            $this->failRun($id, 'ERROR', 'provision timeout waiting for IP/status');
+            $this->failRun(
+                $id,
+                'ERROR',
+                'provision timeout status=' . $info->status . ' ip=' . ($info->ipv4 ?: 'none')
+            );
         }
     }
 

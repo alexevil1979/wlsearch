@@ -89,7 +89,17 @@ final class TimewebProvider implements ProviderInterface
         if (!is_array($json)) {
             throw new \RuntimeException('Timeweb get: invalid JSON');
         }
-        return $this->mapServer($json['server'] ?? $json);
+        $info = $this->mapServer($json['server'] ?? $json);
+
+        // Fallback: dedicated IPs endpoint if networks empty while installing
+        if ($info->ipv4 === null || $info->ipv4 === '') {
+            $ip = $this->fetchIpv4FromIpsEndpoint($serverId);
+            if ($ip !== null) {
+                return new ServerInfo($info->id, $ip, $info->status, $info->raw);
+            }
+        }
+
+        return $info;
     }
 
     public function list(): array
@@ -112,7 +122,6 @@ final class TimewebProvider implements ProviderInterface
     public function destroy(string $serverId): void
     {
         $resp = $this->http->request('DELETE', $this->base . '/servers/' . rawurlencode($serverId));
-        // 404 = already gone — treat as success
         if ($resp['status'] === 404) {
             return;
         }
@@ -140,53 +149,106 @@ final class TimewebProvider implements ProviderInterface
     /** @param array<string, mixed> $server */
     private function extractIpv4(array $server): ?string
     {
-        // Common shapes across Timeweb API versions
-        if (!empty($server['public_ip']) && filter_var($server['public_ip'], FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
-            return (string) $server['public_ip'];
+        foreach (['main_ipv4', 'public_ip', 'ip', 'ipv4'] as $k) {
+            if (!empty($server[$k]) && filter_var($server[$k], FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+                return (string) $server[$k];
+            }
         }
 
         $networks = $server['networks'] ?? $server['network'] ?? [];
+        if ($networks instanceof \stdClass) {
+            $networks = (array) $networks;
+        }
         if (isset($networks['ips']) && is_array($networks['ips'])) {
             $networks = [$networks];
+        }
+        // associative map of networks
+        if (is_array($networks) && $networks !== [] && !array_is_list($networks)) {
+            $networks = array_values($networks);
         }
         if (!is_array($networks)) {
             return null;
         }
 
+        $candidates = [];
         foreach ($networks as $net) {
             if (!is_array($net)) {
                 continue;
             }
+            $netType = strtolower((string) ($net['type'] ?? ''));
             $ips = $net['ips'] ?? [];
             if (!is_array($ips)) {
                 continue;
             }
             foreach ($ips as $ipRow) {
                 if (is_string($ipRow) && filter_var($ipRow, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
-                    return $ipRow;
+                    $candidates[] = ['ip' => $ipRow, 'score' => 10];
+                    continue;
                 }
                 if (!is_array($ipRow)) {
                     continue;
                 }
                 $ip = (string) ($ipRow['ip'] ?? $ipRow['address'] ?? '');
-                $type = strtolower((string) ($ipRow['type'] ?? $ipRow['kind'] ?? 'public'));
-                if ($ip !== '' && filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
-                    if ($type === '' || str_contains($type, 'public') || str_contains($type, 'floating')) {
-                        return $ip;
-                    }
+                if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+                    continue;
                 }
-            }
-            // Fallback: first ipv4 in network
-            foreach ($ips as $ipRow) {
-                if (is_array($ipRow)) {
-                    $ip = (string) ($ipRow['ip'] ?? '');
-                    if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
-                        return $ip;
-                    }
+                $type = strtolower((string) ($ipRow['type'] ?? ''));
+                $score = 1;
+                if (!empty($ipRow['is_main'])) {
+                    $score += 50;
                 }
+                // Timeweb uses type=ipv4 (not "public")
+                if ($type === 'ipv4' || $type === 'public' || str_contains($type, 'float')) {
+                    $score += 20;
+                }
+                if ($netType === 'public' || $netType === '') {
+                    $score += 10;
+                }
+                if ($netType === 'local' || $netType === 'private') {
+                    $score -= 30;
+                }
+                // prefer non-RFC1918
+                if (!preg_match('/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/', $ip)) {
+                    $score += 15;
+                }
+                $candidates[] = ['ip' => $ip, 'score' => $score];
             }
         }
 
+        if ($candidates === []) {
+            return null;
+        }
+        usort($candidates, static fn ($a, $b) => $b['score'] <=> $a['score']);
+        return $candidates[0]['ip'];
+    }
+
+    private function fetchIpv4FromIpsEndpoint(string $serverId): ?string
+    {
+        try {
+            $resp = $this->http->request('GET', $this->base . '/servers/' . rawurlencode($serverId) . '/ips');
+            if ($resp['status'] < 200 || $resp['status'] >= 300) {
+                return null;
+            }
+            $json = json_decode($resp['body'], true);
+            $ips = $json['server_ips'] ?? $json['ips'] ?? $json;
+            if (!is_array($ips)) {
+                return null;
+            }
+            foreach ($ips as $row) {
+                if (!is_array($row)) {
+                    continue;
+                }
+                $ip = (string) ($row['ip'] ?? '');
+                $type = strtolower((string) ($row['type'] ?? 'ipv4'));
+                if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)
+                    && ($type === '' || $type === 'ipv4' || str_contains($type, 'public'))
+                ) {
+                    return $ip;
+                }
+            }
+        } catch (\Throwable) {
+            return null;
+        }
         return null;
     }
 }
