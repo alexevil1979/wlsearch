@@ -14,7 +14,7 @@ $nav = $nav ?? '';
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title><?= View::e(($title ?? 'wlsearch') . ' — wlsearch') ?></title>
-    <link rel="stylesheet" href="/assets/app.css?v=2">
+    <link rel="stylesheet" href="/assets/app.css?v=3">
 </head>
 <body>
 <header class="topbar">

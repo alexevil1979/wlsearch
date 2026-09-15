@@ -121,9 +121,10 @@ $defaultCount = max(1, min(10, $dailyCapacity > 0 ? $dailyCapacity : 1));
         <label for="comment">Комментарий</label>
         <input id="comment" name="comment" type="text" maxlength="255" placeholder="опционально">
 
-        <div style="margin-top:1.2rem">
+        <div style="margin-top:1.2rem;display:flex;flex-wrap:wrap;gap:0.6rem;align-items:center">
             <button class="btn" type="submit" <?= $anyProvider && $dailyCapacity > 0 ? '' : 'disabled' ?>>Создать очередь</button>
             <a class="btn btn-secondary" href="/runs">К списку</a>
+            <a class="btn btn-danger" href="/runs" title="На странице Runs — красная кнопка Остановить очередь">Runs → стоп</a>
         </div>
     </form>
 </div>
