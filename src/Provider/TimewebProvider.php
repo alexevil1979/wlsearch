@@ -6,6 +6,7 @@ namespace Wlsearch\Provider;
 
 use Wlsearch\Support\Env;
 use Wlsearch\Support\HttpClient;
+use Wlsearch\Support\Settings;
 
 final class TimewebProvider implements ProviderInterface
 {
@@ -33,32 +34,54 @@ final class TimewebProvider implements ProviderInterface
 
     public function create(array $opts): ServerInfo
     {
-        $presetId = Env::int('TIMEWEB_PRESET_ID', 0);
-        $osId = Env::int('TIMEWEB_OS_ID', 0);
-        if ($presetId <= 0 || $osId <= 0) {
-            throw new \RuntimeException('TIMEWEB_PRESET_ID and TIMEWEB_OS_ID must be set in .env');
+        $osId = Settings::int('TIMEWEB_OS_ID', Env::int('TIMEWEB_OS_ID', 79));
+        if ($osId <= 0) {
+            throw new \RuntimeException('TIMEWEB_OS_ID must be set (Настройки / .env)');
         }
 
         $body = [
             'name' => $opts['name'],
-            'preset_id' => $presetId,
             'os_id' => $osId,
             'is_ddos_guard' => false,
             'is_local_network' => false,
-            'bandwidth' => Env::int('TIMEWEB_BANDWIDTH', 200),
+            'bandwidth' => Settings::int('TIMEWEB_BANDWIDTH', Env::int('TIMEWEB_BANDWIDTH', 200)),
             'cloud_init' => $opts['cloud_init'],
         ];
+
+        $presetId = Settings::int('TIMEWEB_PRESET_ID', Env::int('TIMEWEB_PRESET_ID', 0));
+        $configuratorId = Settings::int('TIMEWEB_CONFIGURATOR_ID', Env::int('TIMEWEB_CONFIGURATOR_ID', 11));
+        $forcePreset = Settings::bool('TIMEWEB_FORCE_PRESET', Env::bool('TIMEWEB_FORCE_PRESET', false));
+
+        if ($configuratorId > 0 && !$forcePreset) {
+            // Произвольная конфигурация (как в UI: configurator + cpu/ram/disk)
+            $ramGb = max(1, Settings::int('TIMEWEB_RAM_GB', Env::int('TIMEWEB_RAM_GB', 1)));
+            $diskGb = max(1, Settings::int('TIMEWEB_DISK_GB', Env::int('TIMEWEB_DISK_GB', 15)));
+            $body['configuration'] = [
+                'configurator_id' => $configuratorId,
+                'cpu' => max(1, Settings::int('TIMEWEB_CPU', Env::int('TIMEWEB_CPU', 1))),
+                'gpu' => max(0, Settings::int('TIMEWEB_GPU', Env::int('TIMEWEB_GPU', 0))),
+                'ram' => $ramGb * 1024,   // API: МБ
+                'disk' => $diskGb * 1024, // API: МБ
+            ];
+        } elseif ($presetId > 0) {
+            $body['preset_id'] = $presetId;
+        } else {
+            throw new \RuntimeException(
+                'Задайте TIMEWEB_CONFIGURATOR_ID (рекомендуется) или TIMEWEB_PRESET_ID в Настройках'
+            );
+        }
 
         if (!empty($opts['comment'])) {
             $body['comment'] = mb_substr((string) $opts['comment'], 0, 255);
         }
 
-        $zone = $opts['region'] ?? Env::get('TIMEWEB_AVAILABILITY_ZONE');
+        $zone = $opts['region']
+            ?? Settings::get('TIMEWEB_AVAILABILITY_ZONE', Env::get('TIMEWEB_AVAILABILITY_ZONE', 'spb-3'));
         if ($zone !== null && $zone !== '') {
             $body['availability_zone'] = $zone;
         }
 
-        $projectId = Env::int('TIMEWEB_PROJECT_ID', 0);
+        $projectId = Settings::int('TIMEWEB_PROJECT_ID', Env::int('TIMEWEB_PROJECT_ID', 0));
         if ($projectId > 0) {
             $body['project_id'] = $projectId;
         }
@@ -66,7 +89,7 @@ final class TimewebProvider implements ProviderInterface
         $floatingIdUsed = null;
 
         if ($this->ensureIpv4()) {
-            $az = (string) ($zone ?? Env::get('TIMEWEB_AVAILABILITY_ZONE', 'spb-3') ?? 'spb-3');
+            $az = (string) ($zone ?? 'spb-3');
             $fip = $this->resolveFloatingIp($az);
             if ($fip !== null) {
                 // Timeweb validates network.floating_ip as dotted IPv4, not UUID
@@ -201,10 +224,10 @@ final class TimewebProvider implements ProviderInterface
     {
         // Default ON: stop hourly charges for IPv4 after VPS destroy (probe workflow).
         // Set TIMEWEB_DELETE_FLOATING_IP_ON_DESTROY=0 to keep and reuse free IPs.
-        if (!Env::bool('TIMEWEB_DELETE_FLOATING_IP_ON_DESTROY', true)) {
+        if (!Settings::bool('TIMEWEB_DELETE_FLOATING_IP_ON_DESTROY', Env::bool('TIMEWEB_DELETE_FLOATING_IP_ON_DESTROY', true))) {
             return;
         }
-        $pinned = Env::get('TIMEWEB_FLOATING_IP_ID', '') ?? '';
+        $pinned = trim(Settings::get('TIMEWEB_FLOATING_IP_ID', Env::get('TIMEWEB_FLOATING_IP_ID', '') ?? '') ?? '');
         foreach ($ids as $id) {
             if ($pinned !== '' && $id === $pinned) {
                 continue; // never delete explicitly pinned IP
@@ -322,7 +345,7 @@ final class TimewebProvider implements ProviderInterface
 
     private function ensureIpv4(): bool
     {
-        return Env::bool('TIMEWEB_ENSURE_IPV4', true);
+        return Settings::bool('TIMEWEB_ENSURE_IPV4', Env::bool('TIMEWEB_ENSURE_IPV4', true));
     }
 
     /** @param array<string, mixed> $server */
@@ -332,7 +355,7 @@ final class TimewebProvider implements ProviderInterface
         if ($zone !== '') {
             return $zone;
         }
-        return Env::get('TIMEWEB_AVAILABILITY_ZONE', 'spb-3') ?? 'spb-3';
+        return Settings::get('TIMEWEB_AVAILABILITY_ZONE', Env::get('TIMEWEB_AVAILABILITY_ZONE', 'spb-3') ?? 'spb-3') ?? 'spb-3';
     }
 
     /**
@@ -340,7 +363,7 @@ final class TimewebProvider implements ProviderInterface
      */
     private function resolveFloatingIp(string $zone): ?array
     {
-        $pinned = trim(Env::get('TIMEWEB_FLOATING_IP_ID', '') ?? '');
+        $pinned = trim(Settings::get('TIMEWEB_FLOATING_IP_ID', Env::get('TIMEWEB_FLOATING_IP_ID', '') ?? '') ?? '');
         if ($pinned !== '') {
             $fromPin = $this->floatingIpByPin($pinned, $zone);
             if ($fromPin !== null) {

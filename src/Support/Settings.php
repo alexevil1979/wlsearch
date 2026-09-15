@@ -33,6 +33,15 @@ final class Settings
         return (int) $v;
     }
 
+    public static function bool(string $key, bool $default = false): bool
+    {
+        $v = self::get($key);
+        if ($v === null || $v === '') {
+            return $default;
+        }
+        return in_array(strtolower($v), ['1', 'true', 'yes', 'on'], true);
+    }
+
     /** @return array<string, string> */
     public static function all(): array
     {

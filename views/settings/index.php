@@ -38,6 +38,36 @@ $bsSelected = $bsSelected ?? [];
                    value="<?= View::e((string) ($values[$key] ?? '')) ?>">
         <?php endforeach; ?>
 
+        <h2 style="margin-top:1.4rem">Timeweb VPS</h2>
+        <p class="muted" style="margin:0 0 0.75rem">
+            Создание через <code>configuration</code> (не preset): zone / os / configurator / cpu / ram / disk.
+            Токен API остаётся в <code>.env</code> (<code>TIMEWEB_API_TOKEN</code>).
+            Если заполнен <code>PRESET_ID</code> — используется preset вместо configurator.
+        </p>
+        <?php
+        $twLabels = [
+            'TIMEWEB_AVAILABILITY_ZONE' => 'Zone (availability_zone)',
+            'TIMEWEB_OS_ID' => 'OS id',
+            'TIMEWEB_CONFIGURATOR_ID' => 'Configurator id',
+            'TIMEWEB_CPU' => 'CPU (ядра)',
+            'TIMEWEB_GPU' => 'GPU',
+            'TIMEWEB_RAM_GB' => 'RAM (ГБ)',
+            'TIMEWEB_DISK_GB' => 'Диск (ГБ)',
+            'TIMEWEB_BANDWIDTH' => 'Bandwidth (Мбит/с)',
+            'TIMEWEB_PRESET_ID' => 'Preset id (игнор., если есть configurator)',
+            'TIMEWEB_PROJECT_ID' => 'Project id (опц.)',
+            'TIMEWEB_PRESET_COST_RUB' => 'Оценка стоимости ₽ (лимиты)',
+            'TIMEWEB_ENSURE_IPV4' => 'Заказывать IPv4 (1/0)',
+            'TIMEWEB_FLOATING_IP_ID' => 'Pinned floating IP id/адрес',
+            'TIMEWEB_DELETE_FLOATING_IP_ON_DESTROY' => 'Удалять IP при destroy (1/0)',
+        ];
+        foreach ($twLabels as $key => $label):
+        ?>
+            <label for="<?= View::e($key) ?>"><?= View::e($label) ?></label>
+            <input id="<?= View::e($key) ?>" name="<?= View::e($key) ?>" type="text"
+                   value="<?= View::e((string) ($values[$key] ?? '')) ?>">
+        <?php endforeach; ?>
+
         <h2 style="margin-top:1.4rem">bsbord API</h2>
         <label for="BSBORD_API_TOKEN">Токен (bsk_live_…)</label>
         <input id="BSBORD_API_TOKEN" name="BSBORD_API_TOKEN" type="text"

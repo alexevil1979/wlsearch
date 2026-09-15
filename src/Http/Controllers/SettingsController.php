@@ -29,6 +29,21 @@ final class SettingsController
         'BSBORD_OPERATORS',
         'BSBORD_MIN_PASS',
         'BS_MODE_DEFAULT',
+        // Timeweb VPS
+        'TIMEWEB_AVAILABILITY_ZONE',
+        'TIMEWEB_OS_ID',
+        'TIMEWEB_CONFIGURATOR_ID',
+        'TIMEWEB_CPU',
+        'TIMEWEB_GPU',
+        'TIMEWEB_RAM_GB',
+        'TIMEWEB_DISK_GB',
+        'TIMEWEB_BANDWIDTH',
+        'TIMEWEB_PRESET_ID',
+        'TIMEWEB_PROJECT_ID',
+        'TIMEWEB_PRESET_COST_RUB',
+        'TIMEWEB_ENSURE_IPV4',
+        'TIMEWEB_FLOATING_IP_ID',
+        'TIMEWEB_DELETE_FLOATING_IP_ON_DESTROY',
     ];
 
     public function index(): void
