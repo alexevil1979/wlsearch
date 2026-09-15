@@ -140,12 +140,33 @@ final class Worker
             "SELECT COUNT(*) FROM runs WHERE state IN ('PROVISIONING','BOOTSTRAPPING','CONTROL_CHECK','BS_CHECK','DESTROYING')"
         )->fetchColumn();
         if ($live >= $maxParallel) {
-            // Последовательно: не поднимаем новый VPS, пока жив предыдущий
             return;
         }
 
-        $accounts = new \Wlsearch\Provider\ProviderAccountService($this->pdo);
+        // На том же аккаунте ещё висит PASS/KEEP — burn не даст второму create
         $accountId = isset($run['provider_account_id']) ? (int) $run['provider_account_id'] : 0;
+        if ($accountId > 0 && (string) $run['provider'] === 'timeweb') {
+            $st = $this->pdo->prepare(
+                "SELECT COUNT(*) FROM runs
+                 WHERE provider_account_id = ?
+                   AND state IN ('PASS','KEEP')
+                   AND provider_server_id IS NOT NULL AND provider_server_id != ''
+                   AND destroyed_at IS NULL"
+            );
+            $st->execute([$accountId]);
+            $kept = (int) $st->fetchColumn();
+            if ($kept > 0) {
+                $switched = $this->reassignOrderingAccount($run, [$accountId]);
+                if (!$switched) {
+                    fwrite(STDOUT, "run #{$id}: acc #{$accountId} занят PASS/KEEP — жду другой аккаунт\n");
+                    return;
+                }
+                $run = $this->runs->get($id) ?? $run;
+                $accountId = (int) ($run['provider_account_id'] ?? 0);
+            }
+        }
+
+        $accounts = new \Wlsearch\Provider\ProviderAccountService($this->pdo);
         if ($accountId <= 0) {
             $picked = $accounts->pick((string) $run['provider']);
             if ($picked !== null) {
@@ -160,6 +181,11 @@ final class Worker
         $name = sprintf('wlsearch-%d-%s', $id, date('His'));
         $cloudInit = CloudInitBuilder::forRun((string) $run['provider'], $id);
 
+        $tried = [];
+        if ($accountId > 0) {
+            $tried[$accountId] = true;
+        }
+
         try {
             $info = $provider->create([
                 'name' => $name,
@@ -170,6 +196,24 @@ final class Worker
             if ($accountId > 0) {
                 $accounts->markUsed($accountId);
             }
+        } catch (\Wlsearch\Provider\BalanceShortException $e) {
+            if ($accountId > 0) {
+                $accounts->markUsed($accountId, $e->getMessage());
+            }
+            fwrite(STDOUT, "run #{$id}: balance short on acc #" . ($accountId ?: '-') . ' — ' . $e->getMessage() . "\n");
+            $switched = $this->reassignOrderingAccount($run, array_keys($tried));
+            if ($switched) {
+                fwrite(STDOUT, "run #{$id}: переключён на другой аккаунт, retry next tick\n");
+                return;
+            }
+            // Мягко ждём (биллинг после destroy / пополнение), не спамим ERROR
+            if ($this->updatedAgeSeconds($run) < 900) {
+                $this->pdo->prepare(
+                    'UPDATE runs SET error_message = ?, updated_at = NOW() WHERE id = ?'
+                )->execute([mb_substr('ожидание запаса: ' . $e->getMessage(), 0, 2000), $id]);
+                return;
+            }
+            throw $e;
         } catch (\Throwable $e) {
             if ($accountId > 0) {
                 $accounts->markUsed($accountId, $e->getMessage());
@@ -183,13 +227,49 @@ final class Worker
         }
 
         $stmt = $this->pdo->prepare(
-            'UPDATE runs SET provider_server_id = ?, ipv4 = ?, provider_meta = ?, state = ?, updated_at = NOW() WHERE id = ?'
+            'UPDATE runs SET provider_server_id = ?, ipv4 = ?, provider_meta = ?, state = ?, error_message = NULL, updated_at = NOW() WHERE id = ?'
         );
         $stmt->execute([$info->id, $info->ipv4, $meta, 'PROVISIONING', $id]);
         fwrite(STDOUT, "run #{$id}: created server {$info->id} status={$info->status} ip=" . ($info->ipv4 ?: '-') . " acc=" . ($accountId ?: '-') . "\n");
         if ($info->isUnpaidOrBlocked()) {
             fwrite(STDOUT, "run #{$id}: WARNING create returned {$info->status} — see storage/logs/timeweb.log\n");
         }
+    }
+
+    /**
+     * Переназначить ORDERING на другой enabled аккаунт.
+     * @param list<int> $excludeIds
+     */
+    private function reassignOrderingAccount(array $run, array $excludeIds): bool
+    {
+        $id = (int) $run['id'];
+        $provider = (string) $run['provider'];
+        $accounts = new \Wlsearch\Provider\ProviderAccountService($this->pdo);
+        $exclude = array_fill_keys(array_map('intval', $excludeIds), true);
+        $pool = $accounts->listEnabled($provider);
+        foreach ($pool as $row) {
+            $aid = (int) $row['id'];
+            if (isset($exclude[$aid])) {
+                continue;
+            }
+            // Не брать аккаунт с живым PASS/KEEP
+            $st = $this->pdo->prepare(
+                "SELECT COUNT(*) FROM runs
+                 WHERE provider_account_id = ?
+                   AND state IN ('PASS','KEEP')
+                   AND provider_server_id IS NOT NULL AND provider_server_id != ''
+                   AND destroyed_at IS NULL"
+            );
+            $st->execute([$aid]);
+            if ((int) $st->fetchColumn() > 0) {
+                continue;
+            }
+            $this->pdo->prepare(
+                'UPDATE runs SET provider_account_id = ?, error_message = NULL, updated_at = NOW() WHERE id = ?'
+            )->execute([$aid, $id]);
+            return true;
+        }
+        return false;
     }
 
     /** @param array<string, mixed> $run */

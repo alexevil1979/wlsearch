@@ -40,11 +40,13 @@ final class TimewebProvider implements ProviderInterface
             throw new \RuntimeException('TIMEWEB_OS_ID must be set (аккаунт / Настройки)');
         }
 
+        $cleaned = $this->cleanupUnpaidWlsearch();
         $financesBefore = $this->fetchFinances();
         FileLog::write('timeweb', 'create:start', [
             'account' => $this->cfg->logTag(),
             'account_name' => $this->cfg->accountName,
             'finances' => $financesBefore,
+            'cleanup_unpaid' => $cleaned,
             'opts_name' => $opts['name'] ?? null,
         ]);
 
@@ -104,6 +106,11 @@ final class TimewebProvider implements ProviderInterface
         $shortage = $this->explainBalanceRisk($financesBefore, $attachIpv4After);
         if ($shortage !== null) {
             FileLog::write('timeweb', 'create:balance_warn', ['warn' => $shortage, 'finances' => $financesBefore]);
+        }
+        if ($this->isHardBalanceShort($financesBefore, $attachIpv4After)) {
+            throw new BalanceShortException(
+                $shortage ?? 'Недостаточно запаса Timeweb для create (риск no_paid)'
+            );
         }
 
         $resp = $this->http->request('POST', $this->base . '/servers', $body);
@@ -413,20 +420,16 @@ final class TimewebProvider implements ProviderInterface
      */
     private function explainBalanceRisk(array $fin, bool $withIpv4): ?string
     {
-        $balance = $fin['balance'] ?? null;
-        $monthly = $fin['monthly_fee'] ?? null;
-        if ($balance === null) {
+        $need = $this->estimateReserveNeed($fin, $withIpv4);
+        if ($need === null) {
             return null;
         }
-        // Rough new service cost (admin estimate or defaults)
-        $vpsEst = (float) $this->cfg->int('TIMEWEB_PRESET_COST_RUB', 0);
-        if ($vpsEst <= 0) {
-            $vpsEst = 700.0; // typical cheap cloud VPS/month ballpark
-        }
-        $ipEst = $withIpv4 ? 180.0 : 0.0;
-        $need = ($monthly ?? 0.0) + $vpsEst + $ipEst;
-        if ($balance + 0.01 >= $need) {
-            // still warn if hours_left is tiny
+        $balance = (float) ($fin['balance'] ?? 0);
+        $monthly = (float) ($fin['monthly_fee'] ?? 0);
+        $vpsEst = $need['vps'];
+        $ipEst = $need['ip'];
+        $total = $need['total'];
+        if ($balance + 0.01 >= $total) {
             $hours = $fin['hours_left'];
             if ($hours !== null && is_numeric($hours) && (float) $hours < 24) {
                 return sprintf(
@@ -438,13 +441,72 @@ final class TimewebProvider implements ProviderInterface
             return null;
         }
         return sprintf(
-            'Риск no_paid: balance=%.2f ₽ < оценка запаса ≈%.0f ₽ (текущий monthly_fee=%.0f + VPS~%.0f + IP~%.0f). В ЛК «денег хватает» на часы, но create смотрит запас ~30 дней.',
+            'Риск no_paid: balance=%.2f ₽ < запас ≈%.0f ₽ (burn=%.0f + VPS~%.0f + IP~%.0f). '
+            . 'После первого оплаченного VPS на том же аккаунте второго часто не хватает — нужен другой аккаунт или пополнение ≈%.0f ₽.',
             $balance,
-            $need,
-            (float) ($monthly ?? 0),
+            $total,
+            $monthly,
             $vpsEst,
-            $ipEst
+            $ipEst,
+            max(0, $total - $balance)
         );
+    }
+
+    private function isHardBalanceShort(array $fin, bool $withIpv4): bool
+    {
+        $need = $this->estimateReserveNeed($fin, $withIpv4);
+        if ($need === null) {
+            return false;
+        }
+        return ((float) ($fin['balance'] ?? 0)) + 0.01 < $need['total'];
+    }
+
+    /** @return array{total:float,vps:float,ip:float}|null */
+    private function estimateReserveNeed(array $fin, bool $withIpv4): ?array
+    {
+        if (!isset($fin['balance'])) {
+            return null;
+        }
+        $vpsEst = (float) $this->cfg->int('TIMEWEB_PRESET_COST_RUB', 0);
+        if ($vpsEst <= 0) {
+            $vpsEst = 700.0;
+        }
+        $ipEst = $withIpv4 ? 180.0 : 0.0;
+        $monthly = (float) ($fin['monthly_fee'] ?? 0);
+        return [
+            'total' => $monthly + $vpsEst + $ipEst,
+            'vps' => $vpsEst,
+            'ip' => $ipEst,
+        ];
+    }
+
+    /** Удаляет висящие wlsearch-* в no_paid, чтобы не жечь лимит/запас. */
+    public function cleanupUnpaidWlsearch(): int
+    {
+        $n = 0;
+        try {
+            foreach ($this->list() as $s) {
+                if (!$s->isUnpaidOrBlocked()) {
+                    continue;
+                }
+                $name = (string) ($s->raw['name'] ?? '');
+                if ($name === '' || !str_starts_with($name, 'wlsearch-')) {
+                    continue;
+                }
+                try {
+                    $this->destroy($s->id);
+                    $n++;
+                } catch (\Throwable $e) {
+                    FileLog::write('timeweb', 'cleanup_unpaid:error', [
+                        'id' => $s->id,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            }
+        } catch (\Throwable $e) {
+            FileLog::write('timeweb', 'cleanup_unpaid:list_error', ['error' => $e->getMessage()]);
+        }
+        return $n;
     }
 
     /** @param array<string, mixed> $server */
