@@ -274,30 +274,38 @@ sudo -u www-data ./bin/wlsearch-run health
 
 ## 7. Apache vhost
 
+Готовые конфиги в репо (PHP-FPM по TCP `127.0.0.1:9000`):
+
+| Файл | Назначение |
+|------|------------|
+| `deploy/apache-wlsearch.1tlt.ru.conf` | :80 → редирект на HTTPS |
+| `deploy/apache-wlsearch.1tlt.ru-le-ssl.conf` | :443 + Let’s Encrypt + PHP |
+| `deploy/apache-wlsearch.1tlt.ru-http-php.conf` | :80 с PHP (только отладка) |
+
 ```bash
+sudo a2enmod rewrite proxy proxy_fcgi setenvif headers ssl
+
 sudo cp /ssd/www/wlsearch/deploy/apache-wlsearch.1tlt.ru.conf \
   /etc/apache2/sites-available/wlsearch.1tlt.ru.conf
+sudo cp /ssd/www/wlsearch/deploy/apache-wlsearch.1tlt.ru-le-ssl.conf \
+  /etc/apache2/sites-available/wlsearch.1tlt.ru-le-ssl.conf
 
-# Проверьте путь к php-fpm.sock:
-ls -l /run/php/php8.2-fpm.sock
+# Уберите старые/битые варианты, если мешают:
+# sudo a2dissite wlsearch.1tlt.ru-le-ssl.conf  # перед заменой — по желанию
 
 sudo a2ensite wlsearch.1tlt.ru.conf
+sudo a2ensite wlsearch.1tlt.ru-le-ssl.conf
 sudo apache2ctl configtest
 sudo systemctl reload apache2
 ```
 
-Важно в conf:
+В `FilesMatch` должно быть:
 
-- `DocumentRoot /ssd/www/wlsearch/public`
-- `SetEnvIf Authorization` в vhost + rewrite в `public/.htaccess` — иначе phone-agent Bearer не дойдёт до PHP
-- **не** ставить `CGIPassAuth` в `<VirtualHost>` (на части сборок Apache — syntax error)
-- сайт **не** должен шарить root с RushVPN
-
-Проверка HTTP (до SSL):
-
-```bash
-curl -sS -H 'Host: wlsearch.1tlt.ru' http://127.0.0.1/health
+```apache
+SetHandler "proxy:fcgi://127.0.0.1:9000"
 ```
+
+Cloudflare SSL: **Full** / **Full (strict)**. На :443 не должно быть `Redirect` на https.
 
 ---
 
