@@ -435,7 +435,8 @@ sudo systemctl reload php8.2-fpm
 
 | Симптом | Что проверить |
 |---------|----------------|
-| `/health` → HTML **301 Moved** | Это редирект HTTP→HTTPS. Проверяйте так: `curl -sSL https://wlsearch.1tlt.ru/health` (с `-L`). Без `-L` curl показывает HTML редиректа. |
+| `/health` → HTML **301** / `Maximum redirects` | Cloudflare Flexible + редирект на origin, или лишний `Redirect` в SSL-vhost. См. § Cloudflare ниже. |
+| `/health` локально **503** на :443 | Неверный socket PHP-FPM в vhost. См. § 503 / FPM ниже. |
 | `There is no active transaction` на migrate | Исправлено в коде (DDL MySQL). `git pull` и снова `./bin/wlsearch-run migrate` |
 | `db=down` в `/health` | MySQL up, `DB_*`, grants, `127.0.0.1` vs `localhost` (socket) |
 | 404 Apache | DocumentRoot = `.../public`, site enabled, DNS |
@@ -446,20 +447,77 @@ sudo systemctl reload php8.2-fpm
 | Selectel без IP | `SELECTEL_EXTERNAL_NET_ID` + network id |
 | Worker молчит | crontab www-data, `wlsearch-run` / `-d open_basedir=`, права на `storage/logs` |
 
-### curl отдаёт 301 HTML вместо JSON
+### curl отдаёт 301 / Maximum redirects (Cloudflare)
 
-Certbot обычно вешает на `:80` редирект на HTTPS. Ответ с `Port 80` / `301 Moved` — это как раз он (или запрос ушёл на HTTP).
+У вас в заголовках `server: cloudflare`. Типичная петля:
+
+1. Cloudflare в режиме **Flexible** ходит на origin по **HTTP :80**
+2. Origin (certbot) отвечает `301 → https://wlsearch.1tlt.ru/...`
+3. Cloudflare снова запрашивает… и так по кругу
+
+**Исправление в Cloudflare (главное):**
+
+- SSL/TLS → Overview → режим **Full** или **Full (strict)** (не Flexible)
+- Always Use HTTPS можно оставить On
+- Подождите 30–60 сек, затем:
 
 ```bash
-curl -sSI http://wlsearch.1tlt.ru/health
 curl -sSI https://wlsearch.1tlt.ru/health
-
-# нужная проверка:
 curl -sSL https://wlsearch.1tlt.ru/health
-# {"status":"ok","db":"up",...}
+```
 
-curl -sSLk https://127.0.0.1/health -H 'Host: wlsearch.1tlt.ru'
-sudo apache2ctl -S | grep -i wlsearch
+**Исправление на origin (SSL vhost не должен редиректить сам на себя):**
+
+```bash
+sudo grep -nE 'Redirect|RewriteRule.*https' \
+  /etc/apache2/sites-enabled/wlsearch.1tlt.ru.conf \
+  /etc/apache2/sites-enabled/wlsearch.1tlt.ru-le-ssl.conf
+
+# В *-le-ssl.conf (порт 443) НЕ должно быть:
+#   Redirect permanent / https://wlsearch.1tlt.ru/
+# Редирект HTTP→HTTPS — только в conf на порту 80.
+```
+
+Проверка **минуя Cloudflare** (подставьте IP сервера):
+
+```bash
+curl -sSIk --resolve wlsearch.1tlt.ru:443:127.0.0.1 https://wlsearch.1tlt.ru/health
+```
+
+### 503 на https://127.0.0.1 (PHP-FPM socket)
+
+`503 Service Unavailable` на :443 = Apache не может достучаться до php-fpm (неверный `.sock`).
+
+```bash
+# найти реальный socket
+ls -la /run/php/*.sock 2>/dev/null
+ls -la /usr/local/php82/var/run/*.sock 2>/dev/null
+ls -la /var/run/php/*.sock 2>/dev/null
+
+# что прописано в vhost
+grep -n SetHandler /etc/apache2/sites-enabled/wlsearch*.conf
+```
+
+В **обоих** файлах (`wlsearch.1tlt.ru.conf` и `wlsearch.1tlt.ru-le-ssl.conf`) выставьте правильный socket, например:
+
+```apache
+<FilesMatch \.php$>
+    SetHandler "proxy:unix:/usr/local/php82/var/run/php-fpm.sock|fcgi://localhost"
+</FilesMatch>
+```
+
+(путь возьмите из `ls` выше — на servv часто `/usr/local/php82/...`, а не `/run/php/php8.2-fpm.sock`)
+
+Также добавьте `open_basedir` с `/ssd/www/wlsearch` в этот же SSL/HTTP vhost или в pool FPM.
+
+```bash
+sudo apache2ctl configtest
+sudo systemctl reload apache2
+# перезапуск вашего php-fpm, например:
+sudo systemctl restart php8.2-fpm 2>/dev/null || sudo systemctl restart php-fpm82 2>/dev/null || true
+
+curl -sSIk --resolve wlsearch.1tlt.ru:443:127.0.0.1 https://wlsearch.1tlt.ru/health
+curl -sSLk --resolve wlsearch.1tlt.ru:443:127.0.0.1 https://wlsearch.1tlt.ru/health
 ```
 
 ### open_basedir (частый кейс на servv)
