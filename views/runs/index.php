@@ -74,8 +74,8 @@ $badgeClass = static function (string $state): string {
                     </td>
                     <td><?= $r['control_ok'] === null ? '—' : ((int) $r['control_ok'] ? '✓' : '✗') ?></td>
                     <td><?= $r['bs_ok'] === null ? '—' : ((int) $r['bs_ok'] ? '✓' : '✗') ?></td>
-                    <td class="muted" style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="<?= View::e((string) ($r['error_message'] ?? '')) ?>">
-                        <?= View::e(mb_substr((string) ($r['error_message'] ?? ''), 0, 60)) ?>
+                    <td class="muted" style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="<?= View::e((string) ($r['error_message'] ?? '')) ?>">
+                        <?= View::e(mb_substr((string) ($r['error_message'] ?? ''), 0, 120)) ?>
                     </td>
                     <td style="white-space:nowrap">
                         <?php if ($canDestroy): ?>

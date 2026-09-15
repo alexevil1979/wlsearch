@@ -583,15 +583,25 @@ final class TimewebProvider implements ProviderInterface
     /** @return array{id: string, ip: string} */
     private function createFloatingIp(string $zone): array
     {
-        $resp = $this->http->request('POST', $this->base . '/floating-ips', [
+        // API: только is_ddos_guard + availability_zone (comment у ряда аккаунтов даёт 400)
+        $body = [
             'availability_zone' => $zone,
             'is_ddos_guard' => false,
-            'comment' => 'wlsearch',
+        ];
+        FileLog::write('timeweb', 'floating_ip:create_request', $body);
+        $resp = $this->http->request('POST', $this->base . '/floating-ips', $body);
+        FileLog::write('timeweb', 'floating_ip:create_response', [
+            'http' => $resp['status'],
+            'body' => mb_substr($resp['body'], 0, 2000),
         ]);
         if ($resp['status'] < 200 || $resp['status'] >= 300) {
-            $hint = $resp['status'] === 402
-                ? ' (недостаточно средств Timeweb на новый IPv4)'
-                : '';
+            $hint = match (true) {
+                $resp['status'] === 402 => ' (недостаточно средств Timeweb на новый IPv4; нужен запас ≈месяц тарифа IP ~180₽ поверх уже занятого VPS)',
+                $resp['status'] === 409 => ' (конфликт/лимит floating IP в зоне)',
+                $resp['status'] === 400 => ' (неверная зона или тело запроса)',
+                $resp['status'] === 403 => ' (токен без права на floating IP)',
+                default => '',
+            };
             throw new \RuntimeException(
                 'Timeweb floating IP create failed HTTP ' . $resp['status'] . $hint . ': ' . $resp['body']
             );
@@ -638,12 +648,28 @@ final class TimewebProvider implements ProviderInterface
             $this->base . '/servers/' . rawurlencode($serverId) . '/ips',
             ['type' => 'ipv4']
         );
+        FileLog::write('timeweb', 'attach_ipv4:servers_ips', [
+            'server_id' => $serverId,
+            'http' => $resp['status'],
+            'body' => mb_substr($resp['body'], 0, 1500),
+        ]);
         if ($resp['status'] >= 200 && $resp['status'] < 300) {
             return;
         }
 
-        $fip = $this->findFreeFloatingIp($zone) ?? $this->createFloatingIp($zone);
+        $serversIpsHint = 'servers/ips HTTP ' . $resp['status'] . ': ' . mb_substr($resp['body'], 0, 400);
+
+        try {
+            $fip = $this->findFreeFloatingIp($zone) ?? $this->createFloatingIp($zone);
+        } catch (\Throwable $e) {
+            throw new \RuntimeException(
+                $e->getMessage() . ' | fallback after ' . $serversIpsHint,
+                0,
+                $e
+            );
+        }
         $fipId = $fip['id'];
+        FileLog::write('timeweb', 'attach_ipv4:bind', ['server_id' => $serverId, 'fip_id' => $fipId, 'ip' => $fip['ip']]);
         $bind = $this->http->request(
             'POST',
             $this->base . '/floating-ips/' . rawurlencode($fipId) . '/bind',
@@ -652,9 +678,14 @@ final class TimewebProvider implements ProviderInterface
                 'resource_id' => is_numeric($serverId) ? (int) $serverId : $serverId,
             ]
         );
+        FileLog::write('timeweb', 'attach_ipv4:bind_resp', [
+            'http' => $bind['status'],
+            'body' => mb_substr($bind['body'], 0, 1500),
+        ]);
         if ($bind['status'] < 200 || $bind['status'] >= 300) {
             throw new \RuntimeException(
                 'Timeweb bind floating IP failed HTTP ' . $bind['status'] . ': ' . $bind['body']
+                . ' | after ' . $serversIpsHint
             );
         }
     }
