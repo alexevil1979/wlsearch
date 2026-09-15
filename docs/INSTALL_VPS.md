@@ -285,16 +285,23 @@ sudo -u www-data ./bin/wlsearch-run health
 ```bash
 sudo a2enmod rewrite proxy proxy_fcgi setenvif headers ssl
 
+# На servv часто sites-enabled/*.conf — РЕАЛЬНЫЕ файлы, не symlink.
+# Тогда a2ensite пишет "not properly enabled". Исправление:
+sudo rm -f /etc/apache2/sites-enabled/wlsearch.1tlt.ru.conf \
+           /etc/apache2/sites-enabled/wlsearch.1tlt.ru-le-ssl.conf
+
 sudo cp /ssd/www/wlsearch/deploy/apache-wlsearch.1tlt.ru.conf \
   /etc/apache2/sites-available/wlsearch.1tlt.ru.conf
 sudo cp /ssd/www/wlsearch/deploy/apache-wlsearch.1tlt.ru-le-ssl.conf \
   /etc/apache2/sites-available/wlsearch.1tlt.ru-le-ssl.conf
 
-# Уберите старые/битые варианты, если мешают:
-# sudo a2dissite wlsearch.1tlt.ru-le-ssl.conf  # перед заменой — по желанию
+sudo ln -s /etc/apache2/sites-available/wlsearch.1tlt.ru.conf \
+  /etc/apache2/sites-enabled/wlsearch.1tlt.ru.conf
+sudo ln -s /etc/apache2/sites-available/wlsearch.1tlt.ru-le-ssl.conf \
+  /etc/apache2/sites-enabled/wlsearch.1tlt.ru-le-ssl.conf
 
-sudo a2ensite wlsearch.1tlt.ru.conf
-sudo a2ensite wlsearch.1tlt.ru-le-ssl.conf
+# либо: sudo a2ensite wlsearch.1tlt.ru.conf wlsearch.1tlt.ru-le-ssl.conf
+
 sudo apache2ctl configtest
 sudo systemctl reload apache2
 ```
