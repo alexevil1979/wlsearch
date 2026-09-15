@@ -5,9 +5,7 @@
 ### Обновить код
 
 ```bash
-```bash
-cd /ssd/www/wlsearch && git pull && ./bin/wlsearch-run migrate
-```
+cd /ssd/www/wlsearch && sudo git pull && sudo -u www-data ./bin/wlsearch-run migrate
 sudo systemctl reload php8.2-fpm
 ```
 
@@ -15,7 +13,7 @@ sudo systemctl reload php8.2-fpm
 
 ```bash
 curl -sS https://wlsearch.1tlt.ru/health
-php8.2 bin/wlsearch health
+sudo -u www-data ./bin/wlsearch-run health
 tail -n 100 /ssd/www/wlsearch/storage/logs/worker.log
 ```
 
