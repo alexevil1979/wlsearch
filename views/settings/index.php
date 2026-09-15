@@ -71,7 +71,7 @@ $bsSelected = $bsSelected ?? [];
             'TIMEWEB_PRESET_COST_RUB' => 'Оценка стоимости ₽ (лимиты)',
             'TIMEWEB_ENSURE_IPV4' => 'Заказывать IPv4 (1/0)',
             'TIMEWEB_FLOATING_IP_ID' => 'Pinned floating IP id/адрес',
-            'TIMEWEB_DELETE_FLOATING_IP_ON_DESTROY' => 'Удалять IP при destroy (1/0)',
+            'TIMEWEB_DELETE_FLOATING_IP_ON_DESTROY' => 'Удалять IP при destroy (0=reuse, лимит Timeweb ~10 create/сутки)',
             'TIMEWEB_CONFIGURATOR_ID' => 'Configurator id (если preset пуст)',
             'TIMEWEB_CPU' => 'CPU (только configurator)',
             'TIMEWEB_GPU' => 'GPU (только configurator)',

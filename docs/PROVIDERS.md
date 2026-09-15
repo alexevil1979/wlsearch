@@ -13,7 +13,7 @@
 - **Но:** при `POST /servers` на балансе должно быть **≈ на 30 дней** этого тарифа, иначе **HTTP 402**. После создания платите только за фактические часы до destroy.
 - **`TIMEWEB_ENSURE_IPV4=1`** — публичный IPv4 (тоже почасовой). Сначала берётся свободный floating IP («Не подключен»), иначе новый. В `network.floating_ip` API ждёт **адрес** (`1.2.3.4`), не UUID.
 - `TIMEWEB_FLOATING_IP_ID` — UUID **или** сам IPv4 уже существующего адреса.
-- **`TIMEWEB_DELETE_FLOATING_IP_ON_DESTROY=1`** (по умолчанию) — при destroy VPS удаляет floating IP, чтобы не копить почасовые списания за «пустой» адрес. `0` — оставлять и переиспользовать.
+- **`TIMEWEB_DELETE_FLOATING_IP_ON_DESTROY=0`** (по умолчанию) — при destroy VPS оставлять floating IP и переиспользовать (Timeweb лимит ~10 create IP/сутки). `1` — удалять IP вместе с VPS (дешевле при редких прогонах, но быстро упирается в дневной лимит).
 - Docs: https://timeweb.cloud/api-docs
 
 ## Selectel OpenStack

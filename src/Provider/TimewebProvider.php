@@ -255,9 +255,9 @@ final class TimewebProvider implements ProviderInterface
     /** @param list<string> $ids */
     private function maybeDeleteFloatingIps(array $ids): void
     {
-        // Default ON: stop hourly charges for IPv4 after VPS destroy (probe workflow).
-        // Set TIMEWEB_DELETE_FLOATING_IP_ON_DESTROY=0 to keep and reuse free IPs.
-        if (!Settings::bool('TIMEWEB_DELETE_FLOATING_IP_ON_DESTROY', Env::bool('TIMEWEB_DELETE_FLOATING_IP_ON_DESTROY', true))) {
+        // Default OFF: reuse unbound floating IPs (Timeweb daily create limit ≈10).
+        // Set TIMEWEB_DELETE_FLOATING_IP_ON_DESTROY=1 to drop IP with VPS (дешевле, но жрёт дневной лимит create).
+        if (!Settings::bool('TIMEWEB_DELETE_FLOATING_IP_ON_DESTROY', Env::bool('TIMEWEB_DELETE_FLOATING_IP_ON_DESTROY', false))) {
             return;
         }
         $pinned = trim(Settings::get('TIMEWEB_FLOATING_IP_ID', Env::get('TIMEWEB_FLOATING_IP_ID', '') ?? '') ?? '');
@@ -595,13 +595,7 @@ final class TimewebProvider implements ProviderInterface
             'body' => mb_substr($resp['body'], 0, 2000),
         ]);
         if ($resp['status'] < 200 || $resp['status'] >= 300) {
-            $hint = match (true) {
-                $resp['status'] === 402 => ' (недостаточно средств Timeweb на новый IPv4; нужен запас ≈месяц тарифа IP ~180₽ поверх уже занятого VPS)',
-                $resp['status'] === 409 => ' (конфликт/лимит floating IP в зоне)',
-                $resp['status'] === 400 => ' (неверная зона или тело запроса)',
-                $resp['status'] === 403 => ' (токен без права на floating IP)',
-                default => '',
-            };
+            $hint = $this->floatingIpCreateHint($resp['status'], $resp['body']);
             throw new \RuntimeException(
                 'Timeweb floating IP create failed HTTP ' . $resp['status'] . $hint . ': ' . $resp['body']
             );
@@ -623,6 +617,26 @@ final class TimewebProvider implements ProviderInterface
             }
         }
         throw new \RuntimeException('Timeweb floating IP: missing ipv4 in response');
+    }
+
+    private function floatingIpCreateHint(int $status, string $body): string
+    {
+        $json = json_decode($body, true);
+        $code = is_array($json) ? (string) ($json['error_code'] ?? '') : '';
+        if ($code === 'daily_limit_exceeded' || (is_array($json) && str_contains(strtolower((string) ($json['message'] ?? '')), 'daily limit'))) {
+            $limit = is_array($json['details'] ?? null) ? ($json['details']['limit'] ?? 10) : 10;
+            $until = is_array($json['details'] ?? null) ? (string) ($json['details']['available_date_for_creation'] ?? '') : '';
+            $untilHint = $until !== '' ? "; снова можно с {$until}" : '';
+            return " (дневной лимит create floating IP ≈{$limit} исчерпан{$untilHint}."
+                . ' Поставьте TIMEWEB_DELETE_FLOATING_IP_ON_DESTROY=0 чтобы переиспользовать IP)';
+        }
+        return match (true) {
+            $status === 402 => ' (недостаточно средств Timeweb на новый IPv4; нужен запас ≈месяц тарифа IP ~180₽)',
+            $status === 409 => ' (конфликт/лимит floating IP в зоне)',
+            $status === 400 => ' (неверная зона или тело запроса)',
+            $status === 403 => ' (запрет Timeweb на create floating IP)',
+            default => '',
+        };
     }
 
     private function shouldOrderIpv4(string $status): bool
