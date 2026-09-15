@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace Wlsearch\Run;
 
 use PDO;
+use Wlsearch\Inventory\InventoryService;
 use Wlsearch\Notify\TelegramNotifier;
+use Wlsearch\Probe\BsbordClient;
 use Wlsearch\Provider\ProviderFactory;
 use Wlsearch\Support\Audit;
 use Wlsearch\Support\Database;
@@ -178,19 +180,112 @@ final class RunService
         Audit::log($actor, 'run.retry_control', 'run', (string) $runId);
     }
 
-    public function retryBs(int $runId, string $actor): void
+    public function retryBs(int $runId, string $actor): string
     {
         $run = $this->get($runId);
         if ($run === null) {
             throw new \RuntimeException('Run not found');
         }
-        if (!(int) ($run['control_ok'] ?? 0)) {
-            throw new \RuntimeException('Сначала нужен control_ok (Phase 1)');
+        $ipv4 = (string) ($run['ipv4'] ?? '');
+        if ($ipv4 === '') {
+            throw new \RuntimeException('Нет IP для BS-проверки');
         }
+        if (in_array((string) $run['state'], ['DESTROYED', 'DESTROYING', 'ORDERING', 'PROVISIONING'], true)) {
+            throw new \RuntimeException('Run в состоянии ' . $run['state'] . ' — retest недоступен');
+        }
+
+        $meta = [];
+        if (!empty($run['provider_meta'])) {
+            $decoded = json_decode((string) $run['provider_meta'], true);
+            if (is_array($decoded)) {
+                $meta = $decoded;
+            }
+        }
+        unset($meta['bsbord_checked'], $meta['bsbord_detail']);
+
         $this->pdo->prepare(
-            'UPDATE runs SET state = ?, bs_ok = NULL, cellular_ok = NULL, verdict = NULL, error_message = NULL, updated_at = NOW() WHERE id = ?'
-        )->execute(['BS_CHECK', $runId]);
+            'UPDATE runs SET state = ?, bs_ok = NULL, cellular_ok = NULL, bs_source = NULL,
+                    verdict = NULL, error_message = NULL, provider_meta = ?, updated_at = NOW() WHERE id = ?'
+        )->execute([
+            'BS_CHECK',
+            json_encode($meta, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+            $runId,
+        ]);
         Audit::log($actor, 'run.retry_bs', 'run', (string) $runId);
+
+        $mode = (string) ($run['bs_mode'] ?? 'agent');
+        if (!in_array($mode, ['bsbord', 'both'], true)) {
+            return 'Сброшено в BS_CHECK — ждите phone agent / worker.';
+        }
+
+        $bsbord = new BsbordClient();
+        if (!$bsbord->isConfigured()) {
+            return 'Сброшено в BS_CHECK, но BSBORD_API_TOKEN не задан.';
+        }
+
+        @set_time_limit(300);
+
+        try {
+            $result = $bsbord->probeIpv4($ipv4);
+        } catch (\Throwable $e) {
+            $meta['bsbord_checked'] = 1;
+            $meta['bsbord_detail'] = 'error: ' . $e->getMessage();
+            $this->pdo->prepare(
+                'UPDATE runs SET provider_meta = ?, state = ?, bs_ok = 0, bs_source = ?, verdict = ?,
+                        error_message = ?, updated_at = NOW() WHERE id = ?'
+            )->execute([
+                json_encode($meta, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                'FAIL_BS',
+                'bsbord',
+                'FAIL_BS',
+                mb_substr('bsbord error: ' . $e->getMessage(), 0, 2000),
+                $runId,
+            ]);
+            throw new \RuntimeException('bsbord error: ' . $e->getMessage());
+        }
+
+        $meta['bsbord_checked'] = 1;
+        $meta['bsbord_detail'] = $result['detail'];
+        $detail = mb_substr($result['detail'], 0, 2000);
+
+        if ($result['ok']) {
+            $ops = $result['operators'] !== [] ? implode(',', $result['operators']) : 'bsbord';
+            $this->pdo->prepare(
+                "UPDATE runs SET provider_meta = ?, bs_ok = 1, cellular_ok = 1, bs_source = 'bsbord',
+                        state = 'PASS', verdict = 'PASS', error_message = ?, updated_at = NOW() WHERE id = ?"
+            )->execute([
+                json_encode($meta, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                $detail,
+                $runId,
+            ]);
+            (new InventoryService($this->pdo))->upsertPass(
+                $runId,
+                $ipv4,
+                (string) $run['provider'],
+                $run['asn'] !== null ? (int) $run['asn'] : null,
+                $run['asn_org'] !== null ? (string) $run['asn_org'] : null,
+                $ops,
+                'bsbord retest: ' . $result['detail'],
+            );
+            $this->tg->send("wlsearch: PASS (retest bsbord) run #{$runId} ip={$ipv4} ops={$ops}");
+            return 'PASS: ' . $result['detail'];
+        }
+
+        $this->pdo->prepare(
+            "UPDATE runs SET provider_meta = ?, bs_ok = 0, bs_source = 'bsbord',
+                    state = 'FAIL_BS', verdict = 'FAIL_BS', error_message = ?, updated_at = NOW() WHERE id = ?"
+        )->execute([
+            json_encode($meta, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+            $detail,
+            $runId,
+        ]);
+        (new InventoryService($this->pdo))->retireByIpv4(
+            $ipv4,
+            $actor,
+            'retest FAIL_BS'
+        );
+        $this->tg->send("wlsearch: FAIL_BS (retest bsbord) run #{$runId} — {$detail}");
+        return 'FAIL_BS: ' . $result['detail'];
     }
 
     /** @return array<string, mixed>|null */

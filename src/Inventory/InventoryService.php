@@ -78,4 +78,15 @@ final class InventoryService
         $stmt->execute([$notes, $id]);
         Audit::log($actor, 'inventory.retire', 'inventory', (string) $id);
     }
+
+    public function retireByIpv4(string $ipv4, string $actor, ?string $notes = null): void
+    {
+        $stmt = $this->pdo->prepare(
+            "UPDATE inventory SET status = 'retired', retired_at = NOW(),
+                    notes = TRIM(CONCAT(COALESCE(notes,''), ' ', COALESCE(?, '')))
+             WHERE ipv4 = ? AND status = 'active'"
+        );
+        $stmt->execute([$notes, $ipv4]);
+        Audit::log($actor, 'inventory.retire_ip', 'inventory', $ipv4, ['notes' => $notes]);
+    }
 }

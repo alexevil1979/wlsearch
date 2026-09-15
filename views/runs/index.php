@@ -45,8 +45,9 @@ $badgeClass = static function (string $state): string {
                 $state = (string) $r['state'];
                 $canDestroy = !in_array($state, ['DESTROYED', 'DESTROYING'], true) && !empty($r['provider_server_id']);
                 $canKeep = !in_array($state, ['DESTROYED', 'KEEP'], true);
-                $canRetryControl = in_array($state, ['FAIL_CONTROL', 'BS_CHECK', 'CONTROL_CHECK'], true) && !empty($r['ipv4']);
-                $canRetryBs = in_array($state, ['FAIL_BS', 'BS_CHECK'], true) && (int) ($r['control_ok'] ?? 0) === 1;
+                $canRetryControl = in_array($state, ['FAIL_CONTROL', 'BS_CHECK', 'CONTROL_CHECK', 'PASS', 'FAIL_BS', 'KEEP'], true) && !empty($r['ipv4']);
+                $canRetryBs = !empty($r['ipv4'])
+                    && !in_array($state, ['DESTROYED', 'DESTROYING', 'ORDERING', 'PROVISIONING', 'BOOTSTRAPPING'], true);
                 ?>
                 <tr>
                     <td>#<?= $id ?></td>
@@ -98,7 +99,7 @@ $badgeClass = static function (string $state): string {
                         <?php if ($canRetryBs): ?>
                             <form method="post" action="/runs/<?= $id ?>/retry-bs" style="display:inline">
                                 <?= $csrf ?>
-                                <button class="btn btn-secondary" type="submit" style="padding:0.25rem 0.45rem;font-size:0.78rem">retry BS</button>
+                                <button class="btn" type="submit" style="padding:0.25rem 0.45rem;font-size:0.78rem" title="Повторная проверка bsbord HTTP+HTTPS сейчас">retest BS</button>
                             </form>
                         <?php endif; ?>
                     </td>

@@ -124,10 +124,12 @@ final class RunsController
                 'destroy' => $service->requestDestroy($id, $actor),
                 'keep' => $service->requestKeep($id, $actor),
                 'retry_control' => $service->retryControl($id, $actor),
-                'retry_bs' => $service->retryBs($id, $actor),
+                'retry_bs' => Flash::set('ok', $service->retryBs($id, $actor)),
                 default => throw new \InvalidArgumentException('unknown action'),
             };
-            Flash::set('ok', "Действие {$action} для run #{$id} принято.");
+            if ($action !== 'retry_bs') {
+                Flash::set('ok', "Действие {$action} для run #{$id} принято.");
+            }
         } catch (\Throwable $e) {
             Flash::set('error', $e->getMessage());
         }
