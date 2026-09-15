@@ -85,7 +85,7 @@ TXT;
         $count = isset($opts['count']) ? (int) $opts['count'] : 1;
         $keep = array_key_exists('keep-on-fail', $opts) || array_key_exists('keep_on_fail', $opts);
         $comment = isset($opts['comment']) ? (string) $opts['comment'] : null;
-        $bsMode = isset($opts['bs-mode']) ? (string) $opts['bs-mode'] : (isset($opts['bs_mode']) ? (string) $opts['bs_mode'] : 'agent');
+        $bsMode = isset($opts['bs-mode']) ? (string) $opts['bs-mode'] : (isset($opts['bs_mode']) ? (string) $opts['bs_mode'] : (Env::get('BS_MODE_DEFAULT', 'bsbord') ?? 'bsbord'));
 
         $ids = (new RunService())->createRuns($provider, $region, $count, $keep, $comment, 'cli', $bsMode);
         fwrite(STDOUT, 'Created runs: #' . implode(', #', $ids) . "\n");

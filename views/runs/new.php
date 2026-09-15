@@ -10,10 +10,10 @@
 /** @var int $maxCreates */
 use Wlsearch\Support\View;
 $anyProvider = $timewebConfigured || $selectelConfigured;
-$bsDefault = $defaultBsMode ?: 'agent';
+$bsDefault = $defaultBsMode ?: 'bsbord';
 ?>
 <h1>Запуск прогона</h1>
-<p class="muted">create → control → BS-проверка (Android SIM и/или bsbord.com).</p>
+<p class="muted">create → control → BS-проверка (по умолчанию bsbord.com).</p>
 
 <?php if (!$anyProvider): ?>
     <div class="flash flash-error">Ни один провайдер не настроен в .env.</div>
@@ -36,10 +36,10 @@ $bsDefault = $defaultBsMode ?: 'agent';
 
         <label for="bs_mode">BS-проверка</label>
         <select id="bs_mode" name="bs_mode" required>
-            <option value="agent" <?= $bsDefault === 'agent' ? 'selected' : '' ?>>Android SIM (Termux agent)</option>
             <option value="bsbord" <?= $bsDefault === 'bsbord' ? 'selected' : '' ?> <?= $bsbordConfigured ? '' : 'disabled' ?>>
-                bsbord.com API <?= $bsbordConfigured ? '' : '(нужен BSBORD_API_TOKEN)' ?>
+                bsbord.com API <?= $bsbordConfigured ? '(основной)' : '(нужен BSBORD_API_TOKEN)' ?>
             </option>
+            <option value="agent" <?= $bsDefault === 'agent' ? 'selected' : '' ?>>Android SIM (Termux agent)</option>
             <option value="both" <?= $bsDefault === 'both' ? 'selected' : '' ?> <?= $bsbordConfigured ? '' : 'disabled' ?>>
                 both — bsbord или agent (PASS при любом)
             </option>

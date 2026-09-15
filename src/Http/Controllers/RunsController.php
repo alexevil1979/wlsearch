@@ -46,7 +46,7 @@ final class RunsController
             'maxCreates' => Settings::int('MAX_CREATES_PER_DAY', 20),
             'bsbordConfigured' => (Env::get('BSBORD_API_TOKEN', '') ?? '') !== ''
                 || (Settings::get('BSBORD_API_TOKEN', '') ?? '') !== '',
-            'defaultBsMode' => Env::get('BS_MODE_DEFAULT', 'agent'),
+            'defaultBsMode' => Settings::get('BS_MODE_DEFAULT', Env::get('BS_MODE_DEFAULT', 'bsbord')),
         ]);
     }
 
@@ -64,7 +64,8 @@ final class RunsController
         $count = (int) ($_POST['count'] ?? 1);
         $keepOnFail = !empty($_POST['keep_on_fail']);
         $comment = trim((string) ($_POST['comment'] ?? ''));
-        $bsMode = strtolower(trim((string) ($_POST['bs_mode'] ?? 'agent')));
+        $defaultMode = Settings::get('BS_MODE_DEFAULT', Env::get('BS_MODE_DEFAULT', 'bsbord')) ?? 'bsbord';
+        $bsMode = strtolower(trim((string) ($_POST['bs_mode'] ?? $defaultMode)));
         $actor = (string) (AuthService::user()['login'] ?? 'admin');
 
         try {

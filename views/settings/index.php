@@ -28,7 +28,7 @@ $bsSelected = $bsSelected ?? [];
             'PROVISION_TIMEOUT_SEC' => 'Timeout provision (сек)',
             'BOOTSTRAP_TIMEOUT_SEC' => 'Timeout bootstrap (сек)',
             'CONTROL_CHECK_TIMEOUT_SEC' => 'Timeout control (сек)',
-            'BS_MODE_DEFAULT' => 'Дефолт BS-режима (agent|bsbord|both)',
+            'BS_MODE_DEFAULT' => 'Дефолт BS при запуске (bsbord|agent|both)',
             'BSBORD_MIN_PASS' => 'Мин. число операторов БС с PASS',
         ];
         foreach ($labels as $key => $label):
