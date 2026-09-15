@@ -7,7 +7,9 @@
 /** @var string|null $defaultSelectelRegion */
 /** @var string|null $defaultBsMode */
 /** @var int $maxParallel */
-/** @var int $maxCreates */
+/** @var int $dailyCapacity */
+/** @var int $createsPerAccount */
+/** @var int $enabledAccountCount */
 /** @var list<array<string,mixed>> $timewebAccounts */
 /** @var list<array<string,mixed>> $selectelAccounts */
 use Wlsearch\Support\View;
@@ -15,9 +17,17 @@ $anyProvider = $timewebConfigured || $selectelConfigured;
 $bsDefault = $defaultBsMode ?: 'bsbord';
 $timewebAccounts = $timewebAccounts ?? [];
 $selectelAccounts = $selectelAccounts ?? [];
+$dailyCapacity = (int) ($dailyCapacity ?? 0);
+$createsPerAccount = (int) ($createsPerAccount ?? 10);
+$enabledAccountCount = (int) ($enabledAccountCount ?? 0);
+$maxParallel = max(1, (int) ($maxParallel ?? 1));
+$defaultCount = max(1, min(10, $dailyCapacity > 0 ? $dailyCapacity : 1));
 ?>
 <h1>Запуск прогона</h1>
-<p class="muted">create → control → BS. Аккаунты: <a href="/accounts">/accounts</a>.</p>
+<p class="muted">
+    Последовательно: одновременно только <?= (int) $maxParallel ?> VPS (create → check → destroy → следующий).
+    Аккаунты: <a href="/accounts">/accounts</a>.
+</p>
 
 <?php if (!$anyProvider): ?>
     <div class="flash flash-error">Нет аккаунтов — добавьте в <a href="/accounts">Аккаунты</a> или .env.</div>
@@ -36,7 +46,7 @@ $selectelAccounts = $selectelAccounts ?? [];
 
         <div id="acc-tw" style="margin:0.75rem 0">
             <p style="margin:0 0 0.4rem;font-weight:600">Аккаунты Timeweb</p>
-            <p class="muted" style="margin:0 0 0.5rem">Галочки = участвуют в этом запуске. Пусто = все включённые в /accounts.</p>
+            <p class="muted" style="margin:0 0 0.5rem">Галочки = участвуют. Лимит <?= (int) $createsPerAccount ?> create/сутки на аккаунт.</p>
             <?php if ($timewebAccounts === []): ?>
                 <p class="muted">Нет аккаунтов — <a href="/accounts">добавить</a></p>
             <?php else: ?>
@@ -74,7 +84,7 @@ $selectelAccounts = $selectelAccounts ?? [];
             <?php endif; ?>
         </div>
 
-        <label for="region">Region / AZ (опц., иначе из аккаунта)</label>
+        <label for="region">Region / AZ (опц.)</label>
         <input id="region" name="region" type="text"
                value="<?= View::e((string) ($timewebConfigured ? $defaultRegion : $defaultSelectelRegion)) ?>"
                placeholder="spb-3 или ru-9a">
@@ -86,15 +96,24 @@ $selectelAccounts = $selectelAccounts ?? [];
             </option>
             <option value="agent" <?= $bsDefault === 'agent' ? 'selected' : '' ?>>Android SIM (Termux agent)</option>
             <option value="both" <?= $bsDefault === 'both' ? 'selected' : '' ?> <?= $bsbordConfigured ? '' : 'disabled' ?>>
-                both — bsbord или agent (PASS при любом)
+                both — bsbord или agent
             </option>
         </select>
 
-        <label for="count">Count</label>
-        <input id="count" name="count" type="number" min="1" max="20" value="1" required>
-        <p class="muted">Лимиты: parallel ≤ <?= (int) $maxParallel ?>, creates/day ≤ <?= (int) $maxCreates ?>. Count &gt; 1 раскидывается по отмеченным аккаунтам.</p>
+        <label for="count">Сколько IP перебрать (очередь)</label>
+        <input id="count" name="count" type="number" min="1" max="<?= max(1, $dailyCapacity) ?>" value="<?= (int) $defaultCount ?>" required>
+        <p class="muted">
+            Сегодня осталось ≈ <strong><?= (int) $dailyCapacity ?></strong>
+            (<?= (int) $createsPerAccount ?> × <?= (int) $enabledAccountCount ?> вкл. аккаунтов).
+            Параллельно живых VM: <?= (int) $maxParallel ?> — остальные ждут в ORDERING.
+        </p>
 
-        <label>
+        <label style="display:inline-flex;align-items:center;gap:0.4rem;margin-top:0.85rem">
+            <input type="checkbox" name="stop_on_pass" value="1" checked>
+            Останавливать очередь, если найден PASS по BS
+        </label>
+
+        <label style="display:inline-flex;align-items:center;gap:0.4rem;margin-top:0.5rem">
             <input type="checkbox" name="keep_on_fail" value="1">
             keep_on_fail — не удалять VPS при FAIL
         </label>
@@ -103,7 +122,7 @@ $selectelAccounts = $selectelAccounts ?? [];
         <input id="comment" name="comment" type="text" maxlength="255" placeholder="опционально">
 
         <div style="margin-top:1.2rem">
-            <button class="btn" type="submit" <?= $anyProvider ? '' : 'disabled' ?>>Создать run</button>
+            <button class="btn" type="submit" <?= $anyProvider && $dailyCapacity > 0 ? '' : 'disabled' ?>>Создать очередь</button>
             <a class="btn btn-secondary" href="/runs">К списку</a>
         </div>
     </form>

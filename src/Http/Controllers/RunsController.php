@@ -33,6 +33,11 @@ final class RunsController
     {
         $this->requireAuth();
         $accSvc = new \Wlsearch\Provider\ProviderAccountService();
+        $runSvc = new RunService();
+        $twAccounts = $accSvc->listAll('timeweb');
+        $selAccounts = $accSvc->listAll('selectel');
+        $twEnabled = array_values(array_filter($twAccounts, static fn (array $a): bool => (int) $a['enabled'] === 1));
+        $capacity = $runSvc->dailyCreateCapacity('timeweb');
         View::render('runs/new', [
             'title' => 'Запуск прогона',
             'user' => AuthService::user(),
@@ -41,12 +46,14 @@ final class RunsController
             'nav' => 'runs',
             'timewebConfigured' => ProviderFactory::isConfigured('timeweb'),
             'selectelConfigured' => ProviderFactory::isConfigured('selectel'),
-            'timewebAccounts' => $accSvc->listAll('timeweb'),
-            'selectelAccounts' => $accSvc->listAll('selectel'),
+            'timewebAccounts' => $twAccounts,
+            'selectelAccounts' => $selAccounts,
             'defaultRegion' => Settings::get('TIMEWEB_AVAILABILITY_ZONE', Env::get('TIMEWEB_AVAILABILITY_ZONE', 'spb-3')),
             'defaultSelectelRegion' => Env::get('SELECTEL_REGION', 'ru-9a'),
-            'maxParallel' => Settings::int('MAX_PARALLEL_VMS', 3),
-            'maxCreates' => Settings::int('MAX_CREATES_PER_DAY', 20),
+            'maxParallel' => max(1, Settings::int('MAX_PARALLEL_VMS', 1)),
+            'dailyCapacity' => $capacity,
+            'createsPerAccount' => RunService::CREATES_PER_ACCOUNT_DAY,
+            'enabledAccountCount' => count($twEnabled),
             'bsbordConfigured' => (Env::get('BSBORD_API_TOKEN', '') ?? '') !== ''
                 || (Settings::get('BSBORD_API_TOKEN', '') ?? '') !== '',
             'defaultBsMode' => Settings::get('BS_MODE_DEFAULT', Env::get('BS_MODE_DEFAULT', 'bsbord')),
@@ -72,6 +79,7 @@ final class RunsController
         $accountIds = isset($_POST['account_id']) && is_array($_POST['account_id'])
             ? array_values(array_filter(array_map('intval', $_POST['account_id'])))
             : [];
+        $stopOnPass = !empty($_POST['stop_on_pass']);
         $actor = (string) (AuthService::user()['login'] ?? 'admin');
 
         try {
@@ -84,8 +92,9 @@ final class RunsController
                 $actor,
                 $bsMode,
                 $accountIds !== [] ? $accountIds : null,
+                $stopOnPass,
             );
-            Flash::set('ok', 'Создано run: #' . implode(', #', $ids) . '. Worker подхватит в течение минуты.');
+            Flash::set('ok', 'В очередь: #' . implode(', #', $ids) . '. По одному VPS; worker подхватит.');
             header('Location: /runs');
             exit;
         } catch (\Throwable $e) {

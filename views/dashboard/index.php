@@ -32,7 +32,7 @@ use Wlsearch\Support\View;
         <div class="value"><?= (int) $stats['creates_today'] ?> / <?= (int) $stats['max_creates'] ?></div>
     </div>
     <div class="stat">
-        <div class="label">MAX_PARALLEL_VMS</div>
+        <div class="label">Параллель VM</div>
         <div class="value"><?= (int) $stats['max_parallel'] ?></div>
     </div>
     <div class="stat">

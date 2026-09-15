@@ -16,13 +16,21 @@ use Wlsearch\Support\Settings;
 
 final class RunService
 {
+    /** States that actually hold a live cloud VM (ORDERING = очередь, не считается). */
+    public const LIVE_STATES = [
+        'PROVISIONING', 'BOOTSTRAPPING', 'CONTROL_CHECK', 'BS_CHECK', 'DESTROYING',
+    ];
+
     public const ACTIVE_STATES = [
         'ORDERING', 'PROVISIONING', 'BOOTSTRAPPING', 'CONTROL_CHECK', 'BS_CHECK', 'DESTROYING',
     ];
 
     public const TERMINAL_STATES = [
-        'PASS', 'FAIL_BS', 'FAIL_CONTROL', 'ERROR', 'DESTROYED', 'KEEP',
+        'PASS', 'FAIL_BS', 'FAIL_CONTROL', 'ERROR', 'DESTROYED', 'KEEP', 'SKIPPED',
     ];
+
+    /** Timeweb daily floating-IP create limit per account (and soft create budget). */
+    public const CREATES_PER_ACCOUNT_DAY = 10;
 
     private PDO $pdo;
     private TelegramNotifier $tg;
@@ -46,6 +54,7 @@ final class RunService
         string $actor,
         string $bsMode = 'agent',
         ?array $accountIds = null,
+        bool $stopOnPass = true,
     ): array {
         $provider = strtolower($provider);
         if (!in_array($provider, ['timeweb', 'selectel'], true)) {
@@ -76,26 +85,61 @@ final class RunService
             throw new \RuntimeException('Нет включённых аккаунтов для ' . $provider . ' — отметьте галочки в /accounts');
         }
 
-        $count = max(1, min(20, $count));
-        $this->assertCanCreate($count, $provider);
+        $budget = $this->accountCreateBudget($pool);
+        $maxByAccounts = array_sum($budget);
+        if ($maxByAccounts <= 0 && $pool !== []) {
+            throw new \RuntimeException(
+                'Дневной лимит create исчерпан: ' . self::CREATES_PER_ACCOUNT_DAY . ' на аккаунт (сегодня уже использовано)'
+            );
+        }
 
+        $count = max(1, min(100, $count));
+        if ($pool !== [] && $count > $maxByAccounts) {
+            $count = $maxByAccounts;
+        }
+
+        $this->assertCanCreate($count, $provider, $pool);
+
+        $batchId = bin2hex(random_bytes(8));
         $ids = [];
         $stmt = $this->pdo->prepare(
-            'INSERT INTO runs (provider, provider_account_id, region, state, keep_on_fail, bs_mode, comment, created_by, created_at, updated_at)
-             VALUES (?, ?, ?, \'ORDERING\', ?, ?, ?, ?, NOW(), NOW())'
+            'INSERT INTO runs (batch_id, provider, provider_account_id, region, state, keep_on_fail, stop_on_pass, bs_mode, comment, created_by, created_at, updated_at)
+             VALUES (?, ?, ?, ?, \'ORDERING\', ?, ?, ?, ?, ?, NOW(), NOW())'
         );
+
+        $rr = 0;
+        $accountIdsOrdered = array_keys(array_filter($budget, static fn (int $n): bool => $n > 0));
+        if ($accountIdsOrdered === [] && $pool === []) {
+            $accountIdsOrdered = [0]; // legacy
+            $budget[0] = $count;
+        }
 
         for ($i = 0; $i < $count; $i++) {
             $accountId = null;
-            if ($pool !== []) {
-                $picked = $pool[$i % count($pool)];
-                $accountId = (int) $picked['id'];
+            if ($accountIdsOrdered !== [] && !($accountIdsOrdered === [0] && $pool === [])) {
+                // round-robin among accounts that still have budget
+                $tries = count($accountIdsOrdered);
+                for ($t = 0; $t < $tries; $t++) {
+                    $cand = $accountIdsOrdered[$rr % count($accountIdsOrdered)];
+                    $rr++;
+                    if (($budget[$cand] ?? 0) > 0) {
+                        $accountId = $cand > 0 ? $cand : null;
+                        $budget[$cand]--;
+                        break;
+                    }
+                }
+                if ($accountId === null && $pool !== []) {
+                    break;
+                }
             }
+
             $stmt->execute([
+                $batchId,
                 $provider,
                 $accountId,
                 $region !== null && $region !== '' ? $region : null,
                 $keepOnFail ? 1 : 0,
+                $stopOnPass ? 1 : 0,
                 $bsMode,
                 $comment !== null && $comment !== '' ? mb_substr($comment, 0, 255) : null,
                 mb_substr($actor, 0, 64),
@@ -108,53 +152,112 @@ final class RunService
             Audit::log($actor, 'run.create', 'run', (string) $id, [
                 'provider' => $provider,
                 'provider_account_id' => $accountId,
+                'batch_id' => $batchId,
+                'stop_on_pass' => $stopOnPass,
                 'region' => $region,
-                'keep_on_fail' => $keepOnFail,
                 'bs_mode' => $bsMode,
             ]);
         }
 
+        if ($ids === []) {
+            throw new \RuntimeException('Не удалось поставить run в очередь (бюджет аккаунтов = 0)');
+        }
+
         $this->tg->send(sprintf(
-            "wlsearch: создано run×%d provider=%s region=%s bs=%s ids=%s",
+            "wlsearch: очередь run×%d provider=%s batch=%s stop_on_pass=%s ids=%s",
             count($ids),
             $provider,
-            $region ?: '-',
-            $bsMode,
+            $batchId,
+            $stopOnPass ? '1' : '0',
             implode(',', $ids)
         ));
 
         return $ids;
     }
 
-    public function assertCanCreate(int $count = 1, string $provider = 'timeweb'): void
+    /**
+     * @param list<array<string,mixed>> $pool
+     * @return array<int, int> accountId => remaining creates today
+     */
+    public function accountCreateBudget(array $pool): array
     {
-        $maxParallel = Settings::int('MAX_PARALLEL_VMS', 3);
-        $maxDay = Settings::int('MAX_CREATES_PER_DAY', 20);
-        $maxSpend = Settings::int('MAX_DAILY_SPEND_RUB', 500);
-        $costKey = strtolower($provider) === 'selectel' ? 'SELECTEL_PRESET_COST_RUB' : 'TIMEWEB_PRESET_COST_RUB';
-        $cost = Settings::int($costKey, 0);
+        $budget = [];
+        $stmt = $this->pdo->prepare(
+            'SELECT COUNT(*) FROM runs WHERE provider_account_id = ? AND DATE(created_at) = CURDATE()'
+        );
+        foreach ($pool as $row) {
+            $id = (int) $row['id'];
+            $stmt->execute([$id]);
+            $used = (int) $stmt->fetchColumn();
+            $budget[$id] = max(0, self::CREATES_PER_ACCOUNT_DAY - $used);
+        }
+        return $budget;
+    }
 
-        $active = (int) $this->pdo->query(
-            "SELECT COUNT(*) FROM runs WHERE state IN ('ORDERING','PROVISIONING','BOOTSTRAPPING','CONTROL_CHECK','BS_CHECK','DESTROYING')"
+    /** How many creates left today across enabled/selected accounts. */
+    public function dailyCreateCapacity(string $provider, ?array $accountIds = null): int
+    {
+        $accounts = new \Wlsearch\Provider\ProviderAccountService($this->pdo);
+        $pool = $accounts->listEnabled($provider);
+        if ($accountIds !== null && $accountIds !== []) {
+            $allow = array_fill_keys(array_map('intval', $accountIds), true);
+            $pool = array_values(array_filter($pool, static fn (array $r): bool => isset($allow[(int) $r['id']])));
+        }
+        if ($pool === []) {
+            $fallback = Settings::int('MAX_CREATES_PER_DAY', 20);
+            $today = (int) $this->pdo->query('SELECT COUNT(*) FROM runs WHERE DATE(created_at) = CURDATE()')->fetchColumn();
+            return max(0, $fallback - $today);
+        }
+        return array_sum($this->accountCreateBudget($pool));
+    }
+
+    /** @param list<array<string,mixed>> $pool */
+    public function assertCanCreate(int $count = 1, string $provider = 'timeweb', array $pool = []): void
+    {
+        $maxParallel = max(1, Settings::int('MAX_PARALLEL_VMS', 1));
+
+        $live = (int) $this->pdo->query(
+            "SELECT COUNT(*) FROM runs WHERE state IN ('PROVISIONING','BOOTSTRAPPING','CONTROL_CHECK','BS_CHECK','DESTROYING')"
         )->fetchColumn();
 
-        if ($active + $count > $maxParallel) {
-            throw new \RuntimeException("Лимит MAX_PARALLEL_VMS={$maxParallel} (активных={$active})");
+        // Очередь ORDERING можно копить; параллельно живых VM — не больше maxParallel
+        if ($live >= $maxParallel) {
+            throw new \RuntimeException(
+                "Сейчас уже {$live} живых VM (лимит параллели {$maxParallel}). Дождитесь destroy — очередь ORDERING можно копить."
+            );
         }
 
+        if ($pool !== []) {
+            $capacity = array_sum($this->accountCreateBudget($pool));
+            if ($count > $capacity) {
+                throw new \RuntimeException(
+                    "Дневной лимит: {$capacity} create осталось (по "
+                    . self::CREATES_PER_ACCOUNT_DAY . " на аккаунт × " . count($pool) . ')'
+                );
+            }
+            return;
+        }
+
+        $maxDay = Settings::int('MAX_CREATES_PER_DAY', 20);
         $today = (int) $this->pdo->query(
             'SELECT COUNT(*) FROM runs WHERE DATE(created_at) = CURDATE()'
         )->fetchColumn();
         if ($today + $count > $maxDay) {
             throw new \RuntimeException("Лимит MAX_CREATES_PER_DAY={$maxDay} (сегодня={$today})");
         }
+    }
 
-        if ($cost > 0 && $maxSpend > 0) {
-            $estimated = ($today + $count) * $cost;
-            if ($estimated > $maxSpend) {
-                throw new \RuntimeException("Лимит MAX_DAILY_SPEND_RUB={$maxSpend} (оценка={$estimated})");
-            }
+    public function skipBatchRemainder(string $batchId, int $exceptRunId, string $reason): int
+    {
+        if ($batchId === '') {
+            return 0;
         }
+        $stmt = $this->pdo->prepare(
+            "UPDATE runs SET state = 'SKIPPED', verdict = 'SKIPPED', error_message = ?, updated_at = NOW()
+             WHERE batch_id = ? AND id != ? AND state = 'ORDERING'"
+        );
+        $stmt->execute([mb_substr($reason, 0, 2000), $batchId, $exceptRunId]);
+        return $stmt->rowCount();
     }
 
     public function requestDestroy(int $runId, string $actor): void
@@ -307,6 +410,12 @@ final class RunService
                 $result['detail']
             );
             $this->tg->send("wlsearch: PASS (retest bsbord) run #{$runId} ip={$ipv4} ops={$ops}");
+            if ((int) ($run['stop_on_pass'] ?? 0) === 1) {
+                $batchId = (string) ($run['batch_id'] ?? '');
+                if ($batchId !== '') {
+                    $this->skipBatchRemainder($batchId, $runId, 'остановлено: найден PASS в batch');
+                }
+            }
             return 'PASS: ' . $result['detail'];
         }
 

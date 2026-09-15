@@ -21,9 +21,9 @@ $bsSelected = $bsSelected ?? [];
         <div class="form-grid">
         <?php
         $labels = [
-            'MAX_PARALLEL_VMS' => 'Макс. параллельных VM',
-            'MAX_CREATES_PER_DAY' => 'Макс. create в сутки',
-            'MAX_DAILY_SPEND_RUB' => 'Макс. оценка spend ₽/сутки',
+            'MAX_PARALLEL_VMS' => 'Параллельных живых VM (1 = строго последовательно)',
+            'MAX_CREATES_PER_DAY' => 'Fallback creates/day (если нет аккаунтов)',
+            'MAX_DAILY_SPEND_RUB' => 'Макс. оценка spend ₽/сутки (справочно)',
             'BS_TASK_TTL_SEC' => 'TTL BS-задачи (сек)',
             'PROVISION_TIMEOUT_SEC' => 'Timeout provision (сек)',
             'BOOTSTRAP_TIMEOUT_SEC' => 'Timeout bootstrap (сек)',

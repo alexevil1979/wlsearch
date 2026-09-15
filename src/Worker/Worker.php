@@ -83,6 +83,12 @@ final class Worker
              LIMIT 50"
         );
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        // Сначала destroy/live, потом ORDERING — строго последовательно
+        usort($rows, static function (array $a, array $b): int {
+            $prio = static fn (string $s): int => $s === 'ORDERING' ? 1 : 0;
+            $c = $prio((string) $a['state']) <=> $prio((string) $b['state']);
+            return $c !== 0 ? $c : ((int) $a['id'] <=> (int) $b['id']);
+        });
 
         foreach ($rows as $run) {
             try {
@@ -128,6 +134,16 @@ final class Worker
     private function handleOrdering(array $run): void
     {
         $id = (int) $run['id'];
+
+        $maxParallel = max(1, Settings::int('MAX_PARALLEL_VMS', 1));
+        $live = (int) $this->pdo->query(
+            "SELECT COUNT(*) FROM runs WHERE state IN ('PROVISIONING','BOOTSTRAPPING','CONTROL_CHECK','BS_CHECK','DESTROYING')"
+        )->fetchColumn();
+        if ($live >= $maxParallel) {
+            // Последовательно: не поднимаем новый VPS, пока жив предыдущий
+            return;
+        }
+
         $accounts = new \Wlsearch\Provider\ProviderAccountService($this->pdo);
         $accountId = isset($run['provider_account_id']) ? (int) $run['provider_account_id'] : 0;
         if ($accountId <= 0) {
@@ -434,6 +450,7 @@ final class Worker
             $this->tg->send("wlsearch: PASS (bsbord) run #{$id} ip={$ipv4} ops={$ops}");
             Audit::log('bsbord', 'run.pass', 'run', (string) $id, ['operators' => $ops]);
             fwrite(STDOUT, "run #{$id}: PASS via bsbord\n");
+            $this->maybeStopBatchOnPass($run);
             return;
         }
 
@@ -569,5 +586,22 @@ final class Worker
     {
         $updated = strtotime((string) ($run['updated_at'] ?? $run['created_at'])) ?: time();
         return max(0, time() - $updated);
+    }
+
+    /** @param array<string, mixed> $run */
+    private function maybeStopBatchOnPass(array $run): void
+    {
+        if (!(int) ($run['stop_on_pass'] ?? 0)) {
+            return;
+        }
+        $batchId = (string) ($run['batch_id'] ?? '');
+        if ($batchId === '') {
+            return;
+        }
+        $n = $this->runs->skipBatchRemainder($batchId, (int) $run['id'], 'остановлено: найден PASS в batch');
+        if ($n > 0) {
+            fwrite(STDOUT, 'batch ' . $batchId . ": SKIPPED {$n} queued run(s) after PASS\n");
+            $this->tg->send("wlsearch: PASS — остановлена очередь batch {$batchId}, skipped={$n}");
+        }
     }
 }

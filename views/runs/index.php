@@ -7,7 +7,8 @@ $badgeClass = static function (string $state): string {
     return match ($state) {
         'PASS', 'KEEP' => 'badge-ok',
         'FAIL_BS', 'FAIL_CONTROL', 'ERROR', 'DESTROYED' => 'badge-err',
-        'BS_CHECK', 'CONTROL_CHECK', 'BOOTSTRAPPING' => 'badge-warn',
+        'BS_CHECK', 'CONTROL_CHECK', 'BOOTSTRAPPING', 'ORDERING' => 'badge-warn',
+        'SKIPPED' => '',
         default => '',
     };
 };

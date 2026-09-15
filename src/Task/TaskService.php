@@ -8,6 +8,7 @@ use PDO;
 use Wlsearch\Inventory\InventoryService;
 use Wlsearch\CheckedIp\CheckedIpService;
 use Wlsearch\Notify\TelegramNotifier;
+use Wlsearch\Run\RunService;
 use Wlsearch\Support\Audit;
 use Wlsearch\Support\Database;
 use Wlsearch\Support\Env;
@@ -166,6 +167,16 @@ final class TaskService
 
             $this->tg->send("wlsearch: PASS (agent) run #{$runId} ip={$run['ipv4']} operator={$operator}");
             Audit::log('device:' . $deviceId, 'run.pass', 'run', (string) $runId, ['operator' => $operator]);
+            if ((int) ($run['stop_on_pass'] ?? 0) === 1) {
+                $batchId = (string) ($run['batch_id'] ?? '');
+                if ($batchId !== '') {
+                    (new RunService($this->pdo, $this->tg))->skipBatchRemainder(
+                        $batchId,
+                        $runId,
+                        'остановлено: найден PASS в batch'
+                    );
+                }
+            }
             return;
         }
 
