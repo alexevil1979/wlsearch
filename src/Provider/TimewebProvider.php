@@ -49,25 +49,23 @@ final class TimewebProvider implements ProviderInterface
         ];
 
         $presetId = Settings::int('TIMEWEB_PRESET_ID', Env::int('TIMEWEB_PRESET_ID', 0));
-        $configuratorId = Settings::int('TIMEWEB_CONFIGURATOR_ID', Env::int('TIMEWEB_CONFIGURATOR_ID', 11));
-        $forcePreset = Settings::bool('TIMEWEB_FORCE_PRESET', Env::bool('TIMEWEB_FORCE_PRESET', false));
+        $configuratorId = Settings::int('TIMEWEB_CONFIGURATOR_ID', Env::int('TIMEWEB_CONFIGURATOR_ID', 0));
 
-        if ($configuratorId > 0 && !$forcePreset) {
-            // Произвольная конфигурация (как в UI: configurator + cpu/ram/disk)
+        if ($presetId > 0) {
+            $body['preset_id'] = $presetId;
+        } elseif ($configuratorId > 0) {
             $ramGb = max(1, Settings::int('TIMEWEB_RAM_GB', Env::int('TIMEWEB_RAM_GB', 1)));
             $diskGb = max(1, Settings::int('TIMEWEB_DISK_GB', Env::int('TIMEWEB_DISK_GB', 15)));
             $body['configuration'] = [
                 'configurator_id' => $configuratorId,
                 'cpu' => max(1, Settings::int('TIMEWEB_CPU', Env::int('TIMEWEB_CPU', 1))),
                 'gpu' => max(0, Settings::int('TIMEWEB_GPU', Env::int('TIMEWEB_GPU', 0))),
-                'ram' => $ramGb * 1024,   // API: МБ
-                'disk' => $diskGb * 1024, // API: МБ
+                'ram' => $ramGb * 1024,
+                'disk' => $diskGb * 1024,
             ];
-        } elseif ($presetId > 0) {
-            $body['preset_id'] = $presetId;
         } else {
             throw new \RuntimeException(
-                'Задайте TIMEWEB_CONFIGURATOR_ID (рекомендуется) или TIMEWEB_PRESET_ID в Настройках'
+                'Задайте TIMEWEB_PRESET_ID в Настройках (или TIMEWEB_CONFIGURATOR_ID как запасной вариант)'
             );
         }
 

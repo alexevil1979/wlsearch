@@ -40,28 +40,26 @@ $bsSelected = $bsSelected ?? [];
 
         <h2 style="margin-top:1.4rem">Timeweb VPS</h2>
         <p class="muted" style="margin:0 0 0.75rem">
-            Создание через <code>configuration</code> (не preset): zone / os / configurator / cpu / ram / disk.
-            Токен API остаётся в <code>.env</code> (<code>TIMEWEB_API_TOKEN</code>).
-            Биллинг Timeweb Cloud <strong>всегда почасовой</strong> — в API нет переключателя «месяц/час».
-            Метка «Не оплачен» = на балансе мало запаса ≈ на 30 дней этого тарифа (configurator обычно дороже preset).
-            Если заполнен Preset id и включён force preset — используется preset.
+            Основной режим: <strong>preset</strong> (<code>TIMEWEB_PRESET_ID</code> + <code>OS_ID</code> + zone).
+            Биллинг Cloud всегда почасовой. Токен только в <code>.env</code>.
+            Configurator — запасной вариант, если Preset id пустой.
         </p>
         <?php
         $twLabels = [
-            'TIMEWEB_AVAILABILITY_ZONE' => 'Zone (availability_zone)',
+            'TIMEWEB_PRESET_ID' => 'Preset id (обязательно для create)',
             'TIMEWEB_OS_ID' => 'OS id',
-            'TIMEWEB_CONFIGURATOR_ID' => 'Configurator id',
-            'TIMEWEB_CPU' => 'CPU (ядра)',
-            'TIMEWEB_GPU' => 'GPU',
-            'TIMEWEB_RAM_GB' => 'RAM (ГБ)',
-            'TIMEWEB_DISK_GB' => 'Диск (ГБ)',
+            'TIMEWEB_AVAILABILITY_ZONE' => 'Zone (availability_zone)',
             'TIMEWEB_BANDWIDTH' => 'Bandwidth (Мбит/с)',
-            'TIMEWEB_PRESET_ID' => 'Preset id (игнор., если есть configurator)',
             'TIMEWEB_PROJECT_ID' => 'Project id (опц.)',
             'TIMEWEB_PRESET_COST_RUB' => 'Оценка стоимости ₽ (лимиты)',
             'TIMEWEB_ENSURE_IPV4' => 'Заказывать IPv4 (1/0)',
             'TIMEWEB_FLOATING_IP_ID' => 'Pinned floating IP id/адрес',
             'TIMEWEB_DELETE_FLOATING_IP_ON_DESTROY' => 'Удалять IP при destroy (1/0)',
+            'TIMEWEB_CONFIGURATOR_ID' => 'Configurator id (если preset пуст)',
+            'TIMEWEB_CPU' => 'CPU (только configurator)',
+            'TIMEWEB_GPU' => 'GPU (только configurator)',
+            'TIMEWEB_RAM_GB' => 'RAM ГБ (только configurator)',
+            'TIMEWEB_DISK_GB' => 'Диск ГБ (только configurator)',
         ];
         foreach ($twLabels as $key => $label):
         ?>
