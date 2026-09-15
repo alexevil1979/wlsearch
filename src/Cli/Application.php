@@ -26,6 +26,7 @@ final class Application
                 'destroy-failed' => $this->destroyFailed(),
                 'inventory' => $this->inventory(),
                 'agent-token:create' => $this->agentTokenCreate($args),
+                'timeweb:finances' => $this->timewebFinances(),
                 'health' => $this->health(),
                 'help', '--help', '-h' => $this->help(),
                 default => $this->unknown($command),
@@ -49,6 +50,7 @@ Usage:
   php bin/wlsearch destroy-failed
   php bin/wlsearch inventory
   php bin/wlsearch agent-token:create --name=phone-mts --operator=mts
+  php bin/wlsearch timeweb:finances
 
 TXT;
         fwrite(STDOUT, $text);
@@ -96,6 +98,21 @@ TXT;
     {
         $n = (new RunService())->destroyFailed('cli');
         fwrite(STDOUT, "Queued destroy for {$n} failed run(s)\n");
+        return 0;
+    }
+
+    private function timewebFinances(): int
+    {
+        $p = new \Wlsearch\Provider\TimewebProvider();
+        $f = $p->fetchFinances();
+        fwrite(STDOUT, json_encode($f, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) . "\n");
+        $log = dirname(__DIR__, 2) . '/storage/logs/timeweb.log';
+        fwrite(STDOUT, "create log: {$log}\n");
+        if (is_file($log)) {
+            $lines = @file($log, FILE_IGNORE_NEW_LINES) ?: [];
+            $tail = array_slice($lines, -15);
+            fwrite(STDOUT, "--- timeweb.log (tail) ---\n" . implode("\n", $tail) . "\n");
+        }
         return 0;
     }
 

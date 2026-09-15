@@ -148,7 +148,10 @@ final class Worker
             'UPDATE runs SET provider_server_id = ?, ipv4 = ?, provider_meta = ?, state = ?, updated_at = NOW() WHERE id = ?'
         );
         $stmt->execute([$info->id, $info->ipv4, $meta, 'PROVISIONING', $id]);
-        fwrite(STDOUT, "run #{$id}: created server {$info->id}\n");
+        fwrite(STDOUT, "run #{$id}: created server {$info->id} status={$info->status} ip=" . ($info->ipv4 ?: '-') . "\n");
+        if ($info->isUnpaidOrBlocked()) {
+            fwrite(STDOUT, "run #{$id}: WARNING create returned {$info->status} — see storage/logs/timeweb.log\n");
+        }
     }
 
     /** @param array<string, mixed> $run */
@@ -169,11 +172,22 @@ final class Worker
                 'UPDATE runs SET ipv4 = ?, updated_at = NOW() WHERE id = ?'
             );
             $stmt->execute([$info->ipv4, $id]);
+            $finHint = '';
+            if (!empty($info->raw['_wlsearch_meta']['finances_before']) && is_array($info->raw['_wlsearch_meta']['finances_before'])) {
+                $fb = $info->raw['_wlsearch_meta']['finances_before'];
+                $finHint = sprintf(
+                    ' balance=%.2f monthly_fee=%.2f hours_left=%s',
+                    (float) ($fb['balance'] ?? 0),
+                    (float) ($fb['monthly_fee'] ?? 0),
+                    (string) ($fb['hours_left'] ?? '?')
+                );
+            }
             fwrite(STDOUT, "run #{$id}: provider status={$info->status} (unpaid/blocked) → destroy\n");
             $this->failRun(
                 $id,
                 'ERROR',
-                'Timeweb status=' . $info->status . ' (Не оплачен/заблокирован) — пополните баланс ≈30 дней тарифа'
+                'Timeweb status=' . $info->status . ' (Не оплачен)' . $finHint
+                . ' — см. storage/logs/timeweb.log; отдельной активации оплаты в API нет'
             );
             return;
         }

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Wlsearch\Provider;
 
 use Wlsearch\Support\Env;
+use Wlsearch\Support\FileLog;
 use Wlsearch\Support\HttpClient;
 use Wlsearch\Support\Settings;
 
@@ -34,10 +35,16 @@ final class TimewebProvider implements ProviderInterface
 
     public function create(array $opts): ServerInfo
     {
-        $osId = Settings::int('TIMEWEB_OS_ID', Env::int('TIMEWEB_OS_ID', 79));
+        $osId = Settings::int('TIMEWEB_OS_ID', Env::int('TIMEWEB_OS_ID', 99));
         if ($osId <= 0) {
             throw new \RuntimeException('TIMEWEB_OS_ID must be set (Настройки / .env)');
         }
+
+        $financesBefore = $this->fetchFinances();
+        FileLog::write('timeweb', 'create:start', [
+            'finances' => $financesBefore,
+            'opts_name' => $opts['name'] ?? null,
+        ]);
 
         $body = [
             'name' => $opts['name'],
@@ -84,23 +91,32 @@ final class TimewebProvider implements ProviderInterface
             $body['project_id'] = $projectId;
         }
 
-        $floatingIdUsed = null;
+        // IPv4 attach AFTER server is paid/on — ordering FIP first often leaves VPS in no_paid
+        // even when balance looks “enough” (30d reserve = VPS + IP + current burn).
+        $attachIpv4After = $this->ensureIpv4();
 
-        if ($this->ensureIpv4()) {
-            $az = (string) ($zone ?? 'spb-3');
-            $fip = $this->resolveFloatingIp($az);
-            if ($fip !== null) {
-                // Timeweb validates network.floating_ip as dotted IPv4, not UUID
-                $body['network'] = ['floating_ip' => $fip['ip']];
-                $floatingIdUsed = $fip['id'];
-            }
+        $logBody = $body;
+        unset($logBody['cloud_init']); // huge
+        FileLog::write('timeweb', 'create:request', $logBody);
+
+        $shortage = $this->explainBalanceRisk($financesBefore, $attachIpv4After);
+        if ($shortage !== null) {
+            FileLog::write('timeweb', 'create:balance_warn', ['warn' => $shortage, 'finances' => $financesBefore]);
         }
 
         $resp = $this->http->request('POST', $this->base . '/servers', $body);
+        FileLog::write('timeweb', 'create:response', [
+            'http' => $resp['status'],
+            'body' => mb_substr($resp['body'], 0, 4000),
+        ]);
+
         if ($resp['status'] < 200 || $resp['status'] >= 300) {
             $hint = $resp['status'] === 402
-                ? ' (недостаточно средств Timeweb: для создания API требует запас ≈30 дней тарифа, списания потом почасовые)'
+                ? ' (недостаточно средств Timeweb: для создания API требует запас ≈30 дней тарифа+IP)'
                 : '';
+            if ($shortage !== null) {
+                $hint .= ' | ' . $shortage;
+            }
             throw new \RuntimeException('Timeweb create failed HTTP ' . $resp['status'] . $hint . ': ' . $resp['body']);
         }
 
@@ -110,16 +126,29 @@ final class TimewebProvider implements ProviderInterface
         }
 
         $info = $this->mapServer($json['server'] ?? $json);
-        if ($floatingIdUsed !== null) {
-            $raw = $info->raw;
-            $raw['_wlsearch_meta'] = array_merge(
-                is_array($raw['_wlsearch_meta'] ?? null) ? $raw['_wlsearch_meta'] : [],
-                ['floating_ip_id' => $floatingIdUsed]
-            );
-            return new ServerInfo($info->id, $info->ipv4, $info->status, $raw);
+        $meta = ['_wlsearch_meta' => [
+            'attach_ipv4_after' => $attachIpv4After ? 1 : 0,
+            'finances_before' => $financesBefore,
+            'create_status' => $info->status,
+        ]];
+
+        if ($info->isUnpaidOrBlocked()) {
+            $finAfter = $this->fetchFinances();
+            FileLog::write('timeweb', 'create:no_paid', [
+                'server_id' => $info->id,
+                'status' => $info->status,
+                'finances_before' => $financesBefore,
+                'finances_after' => $finAfter,
+                'hint' => $shortage,
+            ]);
+            // Не бросаем исключение: VPS уже создан — worker сделает destroy.
+            $meta['_wlsearch_meta']['no_paid'] = 1;
+            $meta['_wlsearch_meta']['no_paid_hint'] = $shortage
+                ?? 'API вернул no_paid; отдельной активации оплаты нет';
         }
 
-        return $info;
+        $raw = array_merge($info->raw, $meta);
+        return new ServerInfo($info->id, $info->ipv4, $info->status, $raw);
     }
 
     public function get(string $serverId): ServerInfo
@@ -147,7 +176,13 @@ final class TimewebProvider implements ProviderInterface
 
         if (($info->ipv4 === null || $info->ipv4 === '') && $this->ensureIpv4() && $this->shouldOrderIpv4($info->status)) {
             $zone = $this->zoneFromServer($info->raw);
-            $this->attachIpv4IfMissing($serverId, $zone);
+            FileLog::write('timeweb', 'attach_ipv4:start', ['server_id' => $serverId, 'zone' => $zone, 'status' => $info->status]);
+            try {
+                $this->attachIpv4IfMissing($serverId, $zone);
+            } catch (\Throwable $e) {
+                FileLog::write('timeweb', 'attach_ipv4:error', ['server_id' => $serverId, 'error' => $e->getMessage()]);
+                throw $e;
+            }
             $ip = $this->fetchIpv4FromIpsEndpoint($serverId);
             if ($ip !== null) {
                 return new ServerInfo($info->id, $ip, $info->status, $info->raw);
@@ -346,6 +381,70 @@ final class TimewebProvider implements ProviderInterface
         return Settings::bool('TIMEWEB_ENSURE_IPV4', Env::bool('TIMEWEB_ENSURE_IPV4', true));
     }
 
+    /**
+     * @return array{balance:?float,monthly_fee:?float,hourly_fee:?float,hours_left:mixed,currency:?string,raw?:array}
+     */
+    public function fetchFinances(): array
+    {
+        try {
+            $resp = $this->http->request('GET', $this->base . '/account/finances');
+            if ($resp['status'] < 200 || $resp['status'] >= 300) {
+                return ['balance' => null, 'monthly_fee' => null, 'hourly_fee' => null, 'hours_left' => null, 'currency' => null];
+            }
+            $json = json_decode($resp['body'], true);
+            $f = is_array($json['finances'] ?? null) ? $json['finances'] : (is_array($json) ? $json : []);
+            return [
+                'balance' => isset($f['balance']) ? (float) $f['balance'] : null,
+                'monthly_fee' => isset($f['monthly_fee']) ? (float) $f['monthly_fee'] : (isset($f['monthly_cost']) ? (float) $f['monthly_cost'] : null),
+                'hourly_fee' => isset($f['hourly_fee']) ? (float) $f['hourly_fee'] : (isset($f['hourly_cost']) ? (float) $f['hourly_cost'] : null),
+                'hours_left' => $f['hours_left'] ?? null,
+                'currency' => isset($f['currency']) ? (string) $f['currency'] : 'RUB',
+                'raw' => $f,
+            ];
+        } catch (\Throwable) {
+            return ['balance' => null, 'monthly_fee' => null, 'hourly_fee' => null, 'hours_left' => null, 'currency' => null];
+        }
+    }
+
+    /**
+     * Heuristic: Timeweb create needs ~30 days of (current burn + new VPS [+ IP]).
+     */
+    private function explainBalanceRisk(array $fin, bool $withIpv4): ?string
+    {
+        $balance = $fin['balance'] ?? null;
+        $monthly = $fin['monthly_fee'] ?? null;
+        if ($balance === null) {
+            return null;
+        }
+        // Rough new service cost (admin estimate or defaults)
+        $vpsEst = (float) Settings::int('TIMEWEB_PRESET_COST_RUB', Env::int('TIMEWEB_PRESET_COST_RUB', 0));
+        if ($vpsEst <= 0) {
+            $vpsEst = 700.0; // typical cheap cloud VPS/month ballpark
+        }
+        $ipEst = $withIpv4 ? 180.0 : 0.0;
+        $need = ($monthly ?? 0.0) + $vpsEst + $ipEst;
+        if ($balance + 0.01 >= $need) {
+            // still warn if hours_left is tiny
+            $hours = $fin['hours_left'];
+            if ($hours !== null && is_numeric($hours) && (float) $hours < 24) {
+                return sprintf(
+                    'hours_left=%.1f при balance=%.2f — Timeweb может создать VPS как no_paid',
+                    (float) $hours,
+                    $balance
+                );
+            }
+            return null;
+        }
+        return sprintf(
+            'Риск no_paid: balance=%.2f ₽ < оценка запаса ≈%.0f ₽ (текущий monthly_fee=%.0f + VPS~%.0f + IP~%.0f). В ЛК «денег хватает» на часы, но create смотрит запас ~30 дней.',
+            $balance,
+            $need,
+            (float) ($monthly ?? 0),
+            $vpsEst,
+            $ipEst
+        );
+    }
+
     /** @param array<string, mixed> $server */
     private function zoneFromServer(array $server): string
     {
@@ -519,7 +618,7 @@ final class TimewebProvider implements ProviderInterface
     private function shouldOrderIpv4(string $status): bool
     {
         $s = strtolower(trim($status));
-        if (in_array($s, ['installing', 'turning_on', 'creating', 'unknown', ''], true)) {
+        if (in_array($s, ['installing', 'turning_on', 'creating', 'unknown', '', 'no_paid', 'blocked', 'permanent_blocked', 'configuring'], true)) {
             return false;
         }
         return true;
