@@ -255,9 +255,9 @@ final class TimewebProvider implements ProviderInterface
     /** @param list<string> $ids */
     private function maybeDeleteFloatingIps(array $ids): void
     {
-        // Default OFF: reuse unbound floating IPs (Timeweb daily create limit ≈10).
-        // Set TIMEWEB_DELETE_FLOATING_IP_ON_DESTROY=1 to drop IP with VPS (дешевле, но жрёт дневной лимит create).
-        if (!Settings::bool('TIMEWEB_DELETE_FLOATING_IP_ON_DESTROY', Env::bool('TIMEWEB_DELETE_FLOATING_IP_ON_DESTROY', false))) {
+        // Default ON: drop floating IP with VPS after FAIL_BS — reuse бесполезен для лотереи БС.
+        // TIMEWEB_DELETE_FLOATING_IP_ON_DESTROY=0 только если сознательно копите пул IP (упираетесь в daily limit).
+        if (!Settings::bool('TIMEWEB_DELETE_FLOATING_IP_ON_DESTROY', Env::bool('TIMEWEB_DELETE_FLOATING_IP_ON_DESTROY', true))) {
             return;
         }
         $pinned = trim(Settings::get('TIMEWEB_FLOATING_IP_ID', Env::get('TIMEWEB_FLOATING_IP_ID', '') ?? '') ?? '');
@@ -628,7 +628,7 @@ final class TimewebProvider implements ProviderInterface
             $until = is_array($json['details'] ?? null) ? (string) ($json['details']['available_date_for_creation'] ?? '') : '';
             $untilHint = $until !== '' ? "; снова можно с {$until}" : '';
             return " (дневной лимит create floating IP ≈{$limit} исчерпан{$untilHint}."
-                . ' Поставьте TIMEWEB_DELETE_FLOATING_IP_ON_DESTROY=0 чтобы переиспользовать IP)';
+                . ' FAIL_BS IP не переиспользуем — ждите сброса лимита)';
         }
         return match (true) {
             $status === 402 => ' (недостаточно средств Timeweb на новый IPv4; нужен запас ≈месяц тарифа IP ~180₽)',
