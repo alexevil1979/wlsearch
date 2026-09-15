@@ -7,9 +7,11 @@
 
 - Base: `TIMEWEB_API_BASE` (default `https://api.timeweb.cloud/api/v1`)
 - `TIMEWEB_API_TOKEN`, `TIMEWEB_PRESET_ID`, `TIMEWEB_OS_ID`, `TIMEWEB_AVAILABILITY_ZONE`
-- **`TIMEWEB_ENSURE_IPV4=1`** (по умолчанию) — при создании VPS нужен публичный **IPv4**. Сначала берётся **свободный** floating IP на аккаунте (статус «Не подключен»), иначе заказывается новый (~180 ₽/мес).
-- Опционально `TIMEWEB_FLOATING_IP_ID` — принудительно использовать конкретный floating IP.
-- **HTTP 402** при create = недостаточно средств в Timeweb. Пополните баланс (VPS + IP).
+- **Биллинг всегда почасовой.** В API нет режима «на месяц» / «на час» — Timeweb списывает почасово; цены в ЛК показывают как ₽/мес.
+- **Но:** при `POST /servers` на балансе должно быть **≈ на 30 дней** этого тарифа, иначе **HTTP 402**. После создания платите только за фактические часы до destroy.
+- **`TIMEWEB_ENSURE_IPV4=1`** — публичный IPv4 (тоже почасовой). Сначала берётся свободный floating IP («Не подключен»), иначе новый.
+- `TIMEWEB_FLOATING_IP_ID` — принудительно конкретный IP.
+- **`TIMEWEB_DELETE_FLOATING_IP_ON_DESTROY=1`** (по умолчанию) — при destroy VPS удаляет floating IP, чтобы не копить почасовые списания за «пустой» адрес. `0` — оставлять и переиспользовать.
 - Docs: https://timeweb.cloud/api-docs
 
 ## Selectel OpenStack

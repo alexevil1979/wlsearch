@@ -63,6 +63,8 @@ final class TimewebProvider implements ProviderInterface
             $body['project_id'] = $projectId;
         }
 
+        $floatingIdUsed = null;
+
         if ($this->ensureIpv4()) {
             $az = (string) ($zone ?? Env::get('TIMEWEB_AVAILABILITY_ZONE', 'spb-3') ?? 'spb-3');
             $floatingId = Env::get('TIMEWEB_FLOATING_IP_ID', '') ?? '';
@@ -72,13 +74,14 @@ final class TimewebProvider implements ProviderInterface
             }
             if ($floatingId !== '') {
                 $body['network'] = ['floating_ip' => $floatingId];
+                $floatingIdUsed = $floatingId;
             }
         }
 
         $resp = $this->http->request('POST', $this->base . '/servers', $body);
         if ($resp['status'] < 200 || $resp['status'] >= 300) {
             $hint = $resp['status'] === 402
-                ? ' (недостаточно средств Timeweb — пополните баланс; HTTP 402 Payment Required)'
+                ? ' (недостаточно средств Timeweb: для создания API требует запас ≈30 дней тарифа, списания потом почасовые)'
                 : '';
             throw new \RuntimeException('Timeweb create failed HTTP ' . $resp['status'] . $hint . ': ' . $resp['body']);
         }
@@ -88,7 +91,17 @@ final class TimewebProvider implements ProviderInterface
             throw new \RuntimeException('Timeweb create: invalid JSON');
         }
 
-        return $this->mapServer($json['server'] ?? $json);
+        $info = $this->mapServer($json['server'] ?? $json);
+        if ($floatingIdUsed !== null) {
+            $raw = $info->raw;
+            $raw['_wlsearch_meta'] = array_merge(
+                is_array($raw['_wlsearch_meta'] ?? null) ? $raw['_wlsearch_meta'] : [],
+                ['floating_ip_id' => $floatingIdUsed]
+            );
+            return new ServerInfo($info->id, $info->ipv4, $info->status, $raw);
+        }
+
+        return $info;
     }
 
     public function get(string $serverId): ServerInfo
@@ -152,8 +165,11 @@ final class TimewebProvider implements ProviderInterface
 
     public function destroy(string $serverId): void
     {
+        $floatingIds = $this->floatingIpIdsForServer($serverId);
+
         $resp = $this->http->request('DELETE', $this->base . '/servers/' . rawurlencode($serverId));
         if ($resp['status'] === 404) {
+            $this->maybeDeleteFloatingIps($floatingIds);
             return;
         }
         if ($resp['status'] === 423) {
@@ -161,6 +177,46 @@ final class TimewebProvider implements ProviderInterface
         }
         if ($resp['status'] < 200 || $resp['status'] >= 300) {
             throw new \RuntimeException('Timeweb destroy failed HTTP ' . $resp['status'] . ': ' . $resp['body']);
+        }
+
+        $this->maybeDeleteFloatingIps($floatingIds);
+    }
+
+    /** @return list<string> */
+    private function floatingIpIdsForServer(string $serverId): array
+    {
+        $ids = [];
+        foreach ($this->listFloatingIps() as $row) {
+            $rid = (string) ($row['resource_id'] ?? '');
+            $rtype = strtolower((string) ($row['resource_type'] ?? ''));
+            if ($rid === $serverId && ($rtype === '' || $rtype === 'server')) {
+                $id = (string) ($row['id'] ?? '');
+                if ($id !== '') {
+                    $ids[] = $id;
+                }
+            }
+        }
+        return $ids;
+    }
+
+    /** @param list<string> $ids */
+    private function maybeDeleteFloatingIps(array $ids): void
+    {
+        // Default ON: stop hourly charges for IPv4 after VPS destroy (probe workflow).
+        // Set TIMEWEB_DELETE_FLOATING_IP_ON_DESTROY=0 to keep and reuse free IPs.
+        if (!Env::bool('TIMEWEB_DELETE_FLOATING_IP_ON_DESTROY', true)) {
+            return;
+        }
+        $pinned = Env::get('TIMEWEB_FLOATING_IP_ID', '') ?? '';
+        foreach ($ids as $id) {
+            if ($pinned !== '' && $id === $pinned) {
+                continue; // never delete explicitly pinned IP
+            }
+            try {
+                $this->http->request('DELETE', $this->base . '/floating-ips/' . rawurlencode($id));
+            } catch (\Throwable) {
+                // best-effort
+            }
         }
     }
 
