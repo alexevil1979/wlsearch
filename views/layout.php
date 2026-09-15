@@ -14,7 +14,7 @@ $nav = $nav ?? '';
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title><?= View::e(($title ?? 'wlsearch') . ' — wlsearch') ?></title>
-    <link rel="stylesheet" href="/assets/app.css">
+    <link rel="stylesheet" href="/assets/app.css?v=2">
 </head>
 <body>
 <header class="topbar">
@@ -31,12 +31,12 @@ $nav = $nav ?? '';
         <a href="/logs" class="<?= $nav === 'logs' ? 'active' : '' ?>">Логи</a>
         <a href="/blacklist" class="<?= $nav === 'blacklist' ? 'active' : '' ?>">Blacklist</a>
     </nav>
-    <div>
+    <div class="topbar-user">
         <?php if (!empty($user)): ?>
             <span class="muted"><?= View::e($user['login'] ?? '') ?></span>
-            <form method="post" action="/logout" style="display:inline;margin-left:0.5rem">
+            <form method="post" action="/logout" style="display:inline;margin:0">
                 <?= $csrf ?? '' ?>
-                <button type="submit" class="btn btn-secondary" style="padding:0.3rem 0.6rem;font-size:0.85rem">Выход</button>
+                <button type="submit" class="btn btn-secondary btn-sm">Выход</button>
             </form>
         <?php endif; ?>
     </div>

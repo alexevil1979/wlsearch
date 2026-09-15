@@ -79,7 +79,7 @@ use Wlsearch\Support\View;
                         <?php if (!$revoked): ?>
                             <form method="post" action="/devices/<?= (int) $d['id'] ?>/revoke" onsubmit="return confirm('Revoke token?')">
                                 <?= $csrf ?>
-                                <button class="btn btn-danger" type="submit" style="padding:0.25rem 0.45rem;font-size:0.78rem">revoke</button>
+                        <button class="btn btn-danger btn-sm" type="submit">revoke</button>
                             </form>
                         <?php endif; ?>
                     </td>

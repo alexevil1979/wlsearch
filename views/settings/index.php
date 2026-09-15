@@ -12,12 +12,13 @@ $bsSelected = $bsSelected ?? [];
 <h1>Лимиты и настройки</h1>
 <p class="muted">Значения в <code>settings</code> перекрывают `.env`.</p>
 
-<div class="card">
+<div class="card form-wide">
     <form method="post" action="/settings" id="settings-form">
         <?= $csrf ?>
         <input type="hidden" name="bs_ops_cleared" value="1">
 
         <h2>Общие</h2>
+        <div class="form-grid">
         <?php
         $labels = [
             'MAX_PARALLEL_VMS' => 'Макс. параллельных VM',
@@ -32,11 +33,13 @@ $bsSelected = $bsSelected ?? [];
         ];
         foreach ($labels as $key => $label):
         ?>
+            <div>
             <label for="<?= View::e($key) ?>"><?= View::e($label) ?></label>
             <input id="<?= View::e($key) ?>" name="<?= View::e($key) ?>" type="text"
                    value="<?= View::e((string) ($values[$key] ?? '')) ?>">
+            </div>
         <?php endforeach; ?>
-
+        </div>
         <h2 style="margin-top:1.4rem">Telegram</h2>
         <p class="muted" style="margin:0 0 0.75rem">
             Уведомления о PASS/FAIL. Прокси Bot API — как в botfabric (socks5h на локальный туннель).

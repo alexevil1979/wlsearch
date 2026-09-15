@@ -43,7 +43,7 @@ use Wlsearch\Support\View;
                     <td>
                         <form method="post" action="/blacklist/<?= (int) $it['id'] ?>/delete" onsubmit="return confirm('Удалить?')">
                             <?= $csrf ?>
-                            <button class="btn btn-danger" type="submit" style="padding:0.25rem 0.45rem;font-size:0.78rem">delete</button>
+                            <button class="btn btn-danger btn-sm" type="submit">delete</button>
                         </form>
                     </td>
                 </tr>

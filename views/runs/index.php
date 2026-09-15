@@ -12,29 +12,27 @@ $badgeClass = static function (string $state): string {
     };
 };
 ?>
-<h1>Runs</h1>
-<p class="muted">State machine: ORDERING → … → CONTROL_CHECK → BS_CHECK. Destroy при FAIL (если не keep).</p>
-
-<p style="margin-bottom:1rem">
+<div class="page-head">
+    <div>
+        <h1>Runs</h1>
+        <p class="muted">ORDERING → … → CONTROL_CHECK → BS_CHECK. Destroy при FAIL (если не keep).</p>
+    </div>
     <a class="btn" href="/runs/new">Запустить прогон</a>
-</p>
+</div>
 
 <div class="card table-wrap">
     <?php if ($runs === []): ?>
         <p class="muted" style="margin:0">Пока нет прогонов.</p>
     <?php else: ?>
-        <table>
+        <table class="data">
             <thead>
             <tr>
                 <th>ID</th>
                 <th>State</th>
-                <th>BS</th>
-                <th>Provider</th>
-                <th>Аккаунт</th>
+                <th>Cloud</th>
                 <th>IP</th>
                 <th>ASN</th>
-                <th>ctrl</th>
-                <th>bs</th>
+                <th>ctrl/bs</th>
                 <th>Ошибка</th>
                 <th></th>
             </tr>
@@ -49,67 +47,73 @@ $badgeClass = static function (string $state): string {
                 $canRetryControl = in_array($state, ['FAIL_CONTROL', 'BS_CHECK', 'CONTROL_CHECK', 'PASS', 'FAIL_BS', 'KEEP'], true) && !empty($r['ipv4']);
                 $canRetryBs = !empty($r['ipv4'])
                     && !in_array($state, ['DESTROYED', 'DESTROYING', 'ORDERING', 'PROVISIONING', 'BOOTSTRAPPING'], true);
+                $err = (string) ($r['error_message'] ?? '');
+                $accLabel = '';
+                if (!empty($r['account_name'])) {
+                    $accLabel = '#' . (int) ($r['provider_account_id'] ?? 0) . ' ' . (string) $r['account_name'];
+                } elseif (!empty($r['provider_account_id'])) {
+                    $accLabel = '#' . (int) $r['provider_account_id'];
+                }
+                $ctrl = $r['control_ok'] === null ? '—' : ((int) $r['control_ok'] ? '✓' : '✗');
+                $bs = $r['bs_ok'] === null ? '—' : ((int) $r['bs_ok'] ? '✓' : '✗');
                 ?>
                 <tr>
-                    <td>#<?= $id ?></td>
-                    <td><span class="badge <?= $badgeClass($state) ?>"><?= View::e($state) ?></span></td>
-                    <td class="muted">
-                        <?= View::e((string) ($r['bs_mode'] ?? 'agent')) ?>
-                        <?php if (!empty($r['bs_source'])): ?>
-                            <br><span class="badge badge-ok"><?= View::e((string) $r['bs_source']) ?></span>
-                        <?php endif; ?>
-                    </td>
-                    <td><?= View::e((string) $r['provider']) ?><?php if ($r['region']): ?><br><span class="muted"><?= View::e((string) $r['region']) ?></span><?php endif; ?></td>
-                    <td class="muted">
-                        <?php if (!empty($r['account_name'])): ?>
-                            #<?= (int) ($r['provider_account_id'] ?? 0) ?> <?= View::e((string) $r['account_name']) ?>
-                        <?php elseif (!empty($r['provider_account_id'])): ?>
-                            #<?= (int) $r['provider_account_id'] ?>
-                        <?php else: ?>—<?php endif; ?>
+                    <td class="cell-narrow">#<?= $id ?></td>
+                    <td class="cell-narrow">
+                        <div class="cell-stack">
+                            <span class="badge <?= $badgeClass($state) ?>"><?= View::e($state) ?></span>
+                            <span class="muted" style="font-size:0.72rem"><?= View::e((string) ($r['bs_mode'] ?? 'agent')) ?><?php if (!empty($r['bs_source'])): ?> · <?= View::e((string) $r['bs_source']) ?><?php endif; ?></span>
+                        </div>
                     </td>
                     <td>
+                        <div class="cell-stack">
+                            <span><?= View::e((string) $r['provider']) ?><?php if ($r['region']): ?> <span class="muted"><?= View::e((string) $r['region']) ?></span><?php endif; ?></span>
+                            <?php if ($accLabel !== ''): ?>
+                                <span class="muted cell-clip" title="<?= View::e($accLabel) ?>"><?= View::e($accLabel) ?></span>
+                            <?php endif; ?>
+                        </div>
+                    </td>
+                    <td class="cell-narrow">
                         <?php if (!empty($r['ipv4'])): ?>
                             <code><?= View::e((string) $r['ipv4']) ?></code>
                         <?php else: ?>
                             <span class="muted">—</span>
                         <?php endif; ?>
                     </td>
-                    <td class="muted">
+                    <td class="muted cell-narrow">
                         <?php if ($r['asn']): ?>
                             AS<?= (int) $r['asn'] ?>
-                            <?php if ($r['asn_org']): ?><br><?= View::e((string) $r['asn_org']) ?><?php endif; ?>
                         <?php else: ?>—<?php endif; ?>
                     </td>
-                    <td><?= $r['control_ok'] === null ? '—' : ((int) $r['control_ok'] ? '✓' : '✗') ?></td>
-                    <td><?= $r['bs_ok'] === null ? '—' : ((int) $r['bs_ok'] ? '✓' : '✗') ?></td>
-                    <td class="muted" style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="<?= View::e((string) ($r['error_message'] ?? '')) ?>">
-                        <?= View::e(mb_substr((string) ($r['error_message'] ?? ''), 0, 120)) ?>
-                    </td>
-                    <td style="white-space:nowrap">
-                        <?php if ($canDestroy): ?>
-                            <form method="post" action="/runs/<?= $id ?>/destroy" style="display:inline" onsubmit="return confirm('Destroy VPS сейчас?')">
-                                <?= $csrf ?>
-                                <button class="btn btn-danger" type="submit" style="padding:0.25rem 0.45rem;font-size:0.78rem">destroy</button>
-                            </form>
-                        <?php endif; ?>
-                        <?php if ($canKeep): ?>
-                            <form method="post" action="/runs/<?= $id ?>/keep" style="display:inline">
-                                <?= $csrf ?>
-                                <button class="btn btn-secondary" type="submit" style="padding:0.25rem 0.45rem;font-size:0.78rem">keep</button>
-                            </form>
-                        <?php endif; ?>
-                        <?php if ($canRetryControl): ?>
-                            <form method="post" action="/runs/<?= $id ?>/retry-control" style="display:inline">
-                                <?= $csrf ?>
-                                <button class="btn btn-secondary" type="submit" style="padding:0.25rem 0.45rem;font-size:0.78rem">retry ctrl</button>
-                            </form>
-                        <?php endif; ?>
-                        <?php if ($canRetryBs): ?>
-                            <form method="post" action="/runs/<?= $id ?>/retry-bs" style="display:inline">
-                                <?= $csrf ?>
-                                <button class="btn" type="submit" style="padding:0.25rem 0.45rem;font-size:0.78rem" title="Повторная проверка bsbord HTTP+HTTPS сейчас">retest BS</button>
-                            </form>
-                        <?php endif; ?>
+                    <td class="cell-narrow muted"><?= $ctrl ?>/<?= $bs ?></td>
+                    <td class="cell-error" title="<?= View::e($err) ?>"><?= View::e($err) ?></td>
+                    <td class="cell-actions">
+                        <div class="actions">
+                            <?php if ($canDestroy): ?>
+                                <form method="post" action="/runs/<?= $id ?>/destroy" onsubmit="return confirm('Destroy VPS сейчас?')">
+                                    <?= $csrf ?>
+                                    <button class="btn btn-danger btn-sm" type="submit">destroy</button>
+                                </form>
+                            <?php endif; ?>
+                            <?php if ($canKeep): ?>
+                                <form method="post" action="/runs/<?= $id ?>/keep">
+                                    <?= $csrf ?>
+                                    <button class="btn btn-secondary btn-sm" type="submit">keep</button>
+                                </form>
+                            <?php endif; ?>
+                            <?php if ($canRetryControl): ?>
+                                <form method="post" action="/runs/<?= $id ?>/retry-control">
+                                    <?= $csrf ?>
+                                    <button class="btn btn-secondary btn-sm" type="submit">ctrl</button>
+                                </form>
+                            <?php endif; ?>
+                            <?php if ($canRetryBs): ?>
+                                <form method="post" action="/runs/<?= $id ?>/retry-bs">
+                                    <?= $csrf ?>
+                                    <button class="btn btn-sm" type="submit" title="Повторная проверка BS">BS</button>
+                                </form>
+                            <?php endif; ?>
+                        </div>
                     </td>
                 </tr>
             <?php endforeach; ?>

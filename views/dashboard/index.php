@@ -2,10 +2,19 @@
 /** @var array $stats */
 use Wlsearch\Support\View;
 ?>
-<h1>Dashboard</h1>
-<p class="muted">Полный цикл: create → control → BS (phone-agent) → PASS/inventory или FAIL/destroy.</p>
+<div class="page-head">
+    <div>
+        <h1>Dashboard</h1>
+        <p class="muted">create → control → BS → PASS/inventory или FAIL/destroy.</p>
+    </div>
+    <div class="actions">
+        <a class="btn" href="/runs/new">Запустить прогон</a>
+        <a class="btn btn-secondary" href="/runs">Runs</a>
+        <a class="btn btn-secondary" href="/accounts">Аккаунты</a>
+    </div>
+</div>
 
-<div class="grid" style="margin:1rem 0">
+<div class="grid" style="margin:0 0 1rem">
     <div class="stat">
         <div class="label">Активные runs</div>
         <div class="value"><?= (int) $stats['active_runs'] ?></div>
@@ -39,16 +48,9 @@ use Wlsearch\Support\View;
 </div>
 
 <div class="card">
-    <h2>Быстрые действия</h2>
-    <p class="muted">Запуск прогона станет доступен в Phase 1.</p>
-    <a class="btn" href="/runs/new">Запустить прогон</a>
-    <a class="btn btn-secondary" href="/runs">Список runs</a>
-</div>
-
-<div class="card">
     <h2>Критерий PASS</h2>
     <p class="muted" style="margin:0">
-        control_ok ∧ bs_ok ∧ cellular ∧ тело ответа содержит маркер <code>WL_PROBE_OK</code>.
-        Проверка только с реального Android + SIM (Wi‑Fi и VPN выкл).
+        control_ok ∧ bs_ok ∧ cellular ∧ маркер <code>WL_PROBE_OK</code>.
+        BS: bsbord (dpi=on) и/или Android SIM.
     </p>
 </div>

@@ -2,14 +2,18 @@
 /** @var list<array<string,mixed>> $rows */
 use Wlsearch\Support\View;
 ?>
-<h1>Логи / audit</h1>
-<p class="muted">Кто запускал run, destroy, смену лимитов, revoke агентов.</p>
+<div class="page-head">
+    <div>
+        <h1>Логи / audit</h1>
+        <p class="muted">Кто запускал run, destroy, смену лимитов, revoke агентов.</p>
+    </div>
+</div>
 
 <div class="card table-wrap">
 <?php if ($rows === []): ?>
     <p class="muted">Пока пусто.</p>
 <?php else: ?>
-    <table>
+    <table class="data">
         <thead>
         <tr>
             <th>Время</th>
@@ -22,19 +26,17 @@ use Wlsearch\Support\View;
         </thead>
         <tbody>
         <?php foreach ($rows as $r): ?>
+            <?php $details = (string) ($r['details_json'] ?? ''); ?>
             <tr>
-                <td class="muted"><?= View::e((string) $r['created_at']) ?></td>
-                <td><?= View::e((string) $r['actor']) ?></td>
-                <td><code><?= View::e((string) $r['action']) ?></code></td>
-                <td class="muted">
+                <td class="muted cell-narrow"><?= View::e((string) $r['created_at']) ?></td>
+                <td class="cell-narrow"><?= View::e((string) $r['actor']) ?></td>
+                <td class="cell-narrow"><code><?= View::e((string) $r['action']) ?></code></td>
+                <td class="muted cell-narrow">
                     <?= View::e((string) ($r['entity_type'] ?? '')) ?>
                     <?= View::e((string) ($r['entity_id'] ?? '')) ?>
                 </td>
-                <td class="muted"><?= View::e((string) ($r['ip'] ?? '')) ?></td>
-                <td class="muted" style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
-                    title="<?= View::e((string) ($r['details_json'] ?? '')) ?>">
-                    <?= View::e(mb_substr((string) ($r['details_json'] ?? ''), 0, 80)) ?>
-                </td>
+                <td class="muted cell-narrow"><?= View::e((string) ($r['ip'] ?? '')) ?></td>
+                <td class="cell-error" title="<?= View::e($details) ?>"><?= View::e($details) ?></td>
             </tr>
         <?php endforeach; ?>
         </tbody>
