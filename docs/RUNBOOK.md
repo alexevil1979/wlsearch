@@ -5,7 +5,9 @@
 ### Обновить код
 
 ```bash
-cd /ssd/www/wlsearch && git pull && php8.2 bin/wlsearch migrate
+```bash
+cd /ssd/www/wlsearch && git pull && ./bin/wlsearch-run migrate
+```
 sudo systemctl reload php8.2-fpm
 ```
 

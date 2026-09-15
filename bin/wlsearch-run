@@ -1,0 +1,13 @@
+#!/bin/bash
+# CLI wrapper: bypass/override host-wide open_basedir that may omit /ssd/www/wlsearch
+# Usage: bin/wlsearch-run migrate | worker | health | ...
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+PHP_BIN="${PHP_BIN:-/usr/bin/php8.2}"
+if [[ ! -x "$PHP_BIN" ]]; then
+  PHP_BIN="$(command -v php8.2 || command -v php)"
+fi
+# Empty open_basedir disables the restriction for this CLI process only.
+# Override: OPEN_BASEDIR=/ssd/www/wlsearch:/tmp:/usr/local/php82 bin/wlsearch-run migrate
+OBD="${OPEN_BASEDIR:-}"
+exec "$PHP_BIN" -d "open_basedir=${OBD}" "$ROOT/bin/wlsearch" "$@"

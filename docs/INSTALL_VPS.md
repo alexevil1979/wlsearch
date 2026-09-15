@@ -252,14 +252,23 @@ sudo chown www-data:www-data /ssd/www/wlsearch/.env
 
 ## 6. Миграции БД
 
+На хостах с общим `open_basedir` (часто `/ssd/www/botfabric:...` без wlsearch) обычный вызов падает. Используйте обёртку или `-d open_basedir=`:
+
 ```bash
 cd /ssd/www/wlsearch
-sudo -u www-data php8.2 bin/wlsearch migrate
-sudo -u www-data php8.2 bin/wlsearch health
+sudo chmod +x bin/wlsearch-run
+
+# рекомендуется:
+sudo -u www-data ./bin/wlsearch-run migrate
+sudo -u www-data ./bin/wlsearch-run health
+
+# эквивалент:
+# sudo -u www-data php8.2 -d open_basedir= bin/wlsearch migrate
 # ожидается: db=up phase=4
 ```
 
-Если ошибка подключения — проверьте `DB_*` и `GRANT`.
+Если ошибка подключения — проверьте `DB_*` и `GRANT`.  
+Если снова `open_basedir restriction` — см. §13.
 
 ---
 
@@ -331,8 +340,10 @@ sudo crontab -u www-data -e
 Добавьте строку:
 
 ```cron
-* * * * * cd /ssd/www/wlsearch && /usr/bin/php8.2 bin/wlsearch worker >> /ssd/www/wlsearch/storage/logs/worker.log 2>&1
+* * * * * cd /ssd/www/wlsearch && ./bin/wlsearch-run worker >> /ssd/www/wlsearch/storage/logs/worker.log 2>&1
 ```
+
+(альтернатива: `/usr/bin/php8.2 -d open_basedir= bin/wlsearch worker`)
 
 Проверка через минуту:
 
@@ -423,6 +434,7 @@ sudo systemctl reload php8.2-fpm
 
 | Симптом | Что проверить |
 |---------|----------------|
+| `open_basedir restriction` / `bootstrap.php` Operation not permitted | Каталог `/ssd/www/wlsearch` не в `open_basedir`. CLI: `./bin/wlsearch-run …` или `php8.2 -d open_basedir= bin/wlsearch …`. Постоянно — добавить путь в php.ini / FPM pool (ниже). |
 | `db=down` в `/health` | MySQL up, `DB_*`, grants, `127.0.0.1` vs `localhost` (socket) |
 | 404 Apache | DocumentRoot = `.../public`, site enabled, DNS |
 | Белый экран PHP | `storage/logs`, `php8.2-fpm` status, `error.log` Apache |
@@ -430,7 +442,56 @@ sudo systemctl reload php8.2-fpm
 | Agent 401 | token, `CGIPassAuth` / Authorization в Apache |
 | Create Timeweb fail | token, preset/os id, лимиты, баланс облака |
 | Selectel без IP | `SELECTEL_EXTERNAL_NET_ID` + network id |
-| Worker молчит | crontab www-data, путь `php8.2`, права на `storage/logs` |
+| Worker молчит | crontab www-data, `wlsearch-run` / `-d open_basedir=`, права на `storage/logs` |
+
+### open_basedir (частый кейс на servv)
+
+Ошибка вида:
+
+```text
+open_basedir restriction in effect.
+File(/ssd/www/wlsearch/src/bootstrap.php) is not within the allowed path(s):
+(/ssd/www/botfabric:/ssd/www/testtelega:...)
+```
+
+**Сразу (CLI):**
+
+```bash
+cd /ssd/www/wlsearch
+sudo chmod +x bin/wlsearch-run
+sudo -u www-data ./bin/wlsearch-run migrate
+sudo -u www-data ./bin/wlsearch-run health
+```
+
+**Постоянно для CLI** — найти, откуда берётся ограничение:
+
+```bash
+php8.2 -i | grep -i open_basedir
+# или
+grep -R "open_basedir" /usr/local/php82/etc/ /etc/php/8.2/ 2>/dev/null
+```
+
+В `php.ini` для CLI добавьте `/ssd/www/wlsearch` в список (через `:`), например:
+
+```ini
+open_basedir = /ssd/www/botfabric:/ssd/www/testtelega:/ssd/www/tradesignals:/ssd/www/wlsearch:/usr/local/bin:/tmp:/usr/local/php82:/dev/urandom
+```
+
+**Для веб-админки (FPM/Apache):** в pool сайта `wlsearch.1tlt.ru` или в vhost:
+
+```apache
+php_admin_value open_basedir "/ssd/www/wlsearch:/tmp:/usr/local/php82:/dev/urandom"
+```
+
+либо добавьте `/ssd/www/wlsearch` к уже существующему `php_admin_value open_basedir` и перезапустите FPM/Apache:
+
+```bash
+sudo systemctl reload php8.2-fpm
+# или ваш сервис php-fpm82
+sudo systemctl reload apache2
+```
+
+Без этого сайт может отдавать 500 даже если CLI через `-d` уже работает.
 
 Логи:
 

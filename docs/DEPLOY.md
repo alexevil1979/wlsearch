@@ -36,5 +36,7 @@ sudo systemctl reload php8.2-fpm
 ## Cron
 
 ```cron
-* * * * * cd /ssd/www/wlsearch && /usr/bin/php8.2 bin/wlsearch worker >> storage/logs/worker.log 2>&1
+* * * * * cd /ssd/www/wlsearch && ./bin/wlsearch-run worker >> storage/logs/worker.log 2>&1
 ```
+
+При `open_basedir restriction` см. [INSTALL_VPS.md §13](INSTALL_VPS.md).
