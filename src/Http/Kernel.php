@@ -76,6 +76,7 @@ final class Kernel
 
         $router->get('/settings', [$settings, 'index']);
         $router->post('/settings', [$settings, 'save']);
+        $router->post('/settings/bsbord-cfo', [$settings, 'selectCfoTrio']);
 
         $router->get('/logs', [$audit, 'index']);
 

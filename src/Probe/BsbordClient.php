@@ -9,9 +9,9 @@ use Wlsearch\Support\HttpClient;
 use Wlsearch\Support\Settings;
 
 /**
- * Alternative BS check via https://bsbord.com/v1 (mobile DPI-on probes).
- *
- * Docs surface in product UI: POST /v1/probe with Bearer bsk_live_…
+ * bsbord.com API — проверка через мобильные каналы.
+ * «БС» в UI bsbord = dpi=on; «без БС» = dpi=off.
+ * Мы проверяем ТОЛЬКО dpi=on.
  */
 final class BsbordClient
 {
@@ -35,8 +35,53 @@ final class BsbordClient
     }
 
     /**
-     * Probe candidate IPv4 through mobile operators with dpi=on.
-     *
+     * @return list<array{
+     *   op_key: string,
+     *   operator: string,
+     *   name: string,
+     *   region: string,
+     *   region_code: string,
+     *   dpi: string,
+     *   channel_state: string,
+     *   probeable: bool
+     * }>
+     */
+    public function listOperators(string $dpi = 'on'): array
+    {
+        if (!$this->isConfigured()) {
+            throw new \RuntimeException('BSBORD_API_TOKEN не задан');
+        }
+
+        $url = $this->base . '/operators?dpi=' . rawurlencode($dpi) . '&probeable=true';
+        $resp = $this->http->request('GET', $url, null, [
+            'Authorization: Bearer ' . $this->token,
+            'Accept: application/json',
+        ]);
+        if ($resp['status'] < 200 || $resp['status'] >= 300) {
+            throw new \RuntimeException('bsbord operators HTTP ' . $resp['status'] . ': ' . mb_substr($resp['body'], 0, 400));
+        }
+        $json = json_decode($resp['body'], true);
+        $units = is_array($json['units'] ?? null) ? $json['units'] : [];
+        $out = [];
+        foreach ($units as $u) {
+            if (!is_array($u) || empty($u['op_key'])) {
+                continue;
+            }
+            $out[] = [
+                'op_key' => (string) $u['op_key'],
+                'operator' => (string) ($u['operator'] ?? ''),
+                'name' => (string) ($u['name'] ?? $u['operator'] ?? ''),
+                'region' => (string) ($u['region'] ?? ''),
+                'region_code' => strtolower((string) ($u['region_code'] ?? '')),
+                'dpi' => strtolower((string) ($u['dpi'] ?? $dpi)),
+                'channel_state' => (string) ($u['channel_state'] ?? ''),
+                'probeable' => !empty($u['probeable']),
+            ];
+        }
+        return $out;
+    }
+
+    /**
      * @return array{
      *   ok: bool,
      *   operators: list<string>,
@@ -54,19 +99,21 @@ final class BsbordClient
             throw new \InvalidArgumentException('invalid ipv4');
         }
 
-        $operatorsFilter = $this->operatorFilter();
+        $operators = $this->resolveOperatorKeys();
+        if ($operators === []) {
+            throw new \RuntimeException('Нет операторов БС (dpi=on) для проверки — выберите в Настройках');
+        }
+
         $body = [
             'target' => 'http://' . $ipv4 . '/',
-            'dpi' => 'on',
+            'dpi' => 'on', // строго режим БС
+            'operators' => $operators,
             'probes' => [
                 'icmp' => false,
                 'tcp' => true,
             ],
             'tcp_port' => 80,
         ];
-        if ($operatorsFilter !== []) {
-            $body['operators'] = $operatorsFilter;
-        }
 
         $idem = bin2hex(random_bytes(16));
         $resp = $this->http->request('POST', $this->base . '/probe', $body, [
@@ -89,6 +136,76 @@ final class BsbordClient
     }
 
     /**
+     * Resolve BSBORD_OPERATORS setting into full op_keys (dpi=on only).
+     * Empty setting → default ЦФО: megafon, mts, beeline with dpi=on.
+     *
+     * @return list<string>
+     */
+    public function resolveOperatorKeys(): array
+    {
+        $raw = trim((string) (Settings::get('BSBORD_OPERATORS', Env::get('BSBORD_OPERATORS', '')) ?? ''));
+        $units = $this->listOperators('on'); // только БС
+
+        if ($raw === '') {
+            // Дефолт как на скрине: МегаФон / МТС / Билайн ЦФО (БС)
+            $wanted = ['megafon', 'mts', 'beeline'];
+            $keys = [];
+            foreach ($units as $u) {
+                $op = strtolower($u['operator']);
+                $rc = $u['region_code'];
+                if (in_array($op, $wanted, true) && ($rc === 'cfo' || str_contains(mb_strtolower($u['region']), 'цфо') || str_contains(mb_strtolower($u['region']), 'моск'))) {
+                    $keys[] = $u['op_key'];
+                }
+            }
+            if ($keys === []) {
+                // fallback: любые megafon/mts/beeline с dpi=on
+                foreach ($units as $u) {
+                    if (in_array(strtolower($u['operator']), $wanted, true)) {
+                        $keys[] = $u['op_key'];
+                    }
+                }
+            }
+            return array_values(array_unique($keys));
+        }
+
+        $parts = array_filter(array_map('trim', explode(',', $raw)));
+        $keys = [];
+        foreach ($parts as $part) {
+            if (str_contains($part, '|')) {
+                // full op_key — only allow dpi=on suffix
+                if (str_ends_with(strtolower($part), '|on') || str_ends_with(strtolower($part), '|on"')) {
+                    $keys[] = $part;
+                } elseif (!preg_match('/\|off$/i', $part)) {
+                    // if no dpi suffix, try match from units
+                    foreach ($units as $u) {
+                        if ($u['op_key'] === $part && $u['dpi'] === 'on') {
+                            $keys[] = $u['op_key'];
+                        }
+                    }
+                }
+                continue;
+            }
+            // short name: mts / megafon / beeline — take all dpi=on or prefer cfo
+            $op = strtolower($part);
+            $aliases = match ($op) {
+                'мтс', 'mtc' => ['mts'],
+                'мегафон', 'mega', 'megafon' => ['megafon'],
+                'билайн', 'beeline' => ['beeline'],
+                'теле2', 'tele2' => ['tele2'],
+                'йота', 'yota' => ['yota'],
+                default => [$op],
+            };
+            foreach ($units as $u) {
+                if (in_array(strtolower($u['operator']), $aliases, true) && $u['dpi'] === 'on') {
+                    $keys[] = $u['op_key'];
+                }
+            }
+        }
+
+        return array_values(array_unique($keys));
+    }
+
+    /**
      * @param array<string, mixed> $json
      * @return array{ok:bool,operators:list<string>,marker_ok:bool,detail:string,raw:array}
      */
@@ -97,17 +214,18 @@ final class BsbordClient
         $byTarget = $json['by_target'] ?? [];
         $targetBlock = null;
         if (is_array($byTarget)) {
-            foreach ($byTarget as $key => $block) {
-                if (is_array($block)) {
-                    $targetBlock = $block;
-                    break;
-                }
-            }
-            // try exact keys
             foreach ([$ipv4, 'http://' . $ipv4 . '/', 'http://' . $ipv4] as $k) {
                 if (isset($byTarget[$k]) && is_array($byTarget[$k])) {
                     $targetBlock = $byTarget[$k];
                     break;
+                }
+            }
+            if ($targetBlock === null) {
+                foreach ($byTarget as $block) {
+                    if (is_array($block)) {
+                        $targetBlock = $block;
+                        break;
+                    }
                 }
             }
         }
@@ -116,14 +234,15 @@ final class BsbordClient
         $passed = [];
         $markerOk = false;
         $notes = [];
+        $minPass = max(1, Settings::int('BSBORD_MIN_PASS', Env::int('BSBORD_MIN_PASS', 1)));
 
         foreach ($byOp as $opKey => $leg) {
             if (!is_array($leg)) {
                 continue;
             }
             $dpi = strtolower((string) ($leg['dpi'] ?? ''));
-            // Only count DPI/whitelist-on legs as BS signal
             if ($dpi !== '' && $dpi !== 'on') {
+                $notes[] = $opKey . '=skip-no-bs';
                 continue;
             }
 
@@ -133,35 +252,26 @@ final class BsbordClient
             $bodyHead = (string) ($http['body_head'] ?? '');
             $hasMarker = $bodyHead !== '' && str_contains($bodyHead, $marker);
 
-            $legOk = false;
+            $legOk = $hasMarker || $httpOk || $tcpOk || !empty($leg['ok']);
             if ($hasMarker) {
-                $legOk = true;
                 $markerOk = true;
-            } elseif ($httpOk) {
-                $legOk = true;
-            } elseif ($tcpOk) {
-                // TCP:80 from dpi=on mobile channel — strong BS reachability signal;
-                // marker already verified by control_ok on orchestrator.
-                $legOk = true;
             }
 
-            if ($legOk || !empty($leg['ok'])) {
-                if ($legOk || (!empty($leg['ok']) && ($tcpOk || $httpOk))) {
-                    $op = (string) ($leg['operator'] ?? explode('|', (string) $opKey)[0] ?? 'other');
-                    if ($op !== '' && !in_array($op, $passed, true)) {
-                        $passed[] = $op;
-                    }
-                    $notes[] = $opKey . '=ok';
+            if ($legOk) {
+                $op = (string) ($leg['operator'] ?? explode('|', (string) $opKey)[0] ?? 'other');
+                if ($op !== '' && !in_array($op, $passed, true)) {
+                    $passed[] = $op;
                 }
+                $notes[] = $opKey . '=ok';
             } else {
                 $notes[] = $opKey . '=fail';
             }
         }
 
-        $ok = $passed !== [];
+        $ok = count($passed) >= $minPass;
         $detail = $ok
-            ? ('bsbord PASS ops=' . implode(',', $passed) . ' marker=' . ($markerOk ? 'yes' : 'n/a-tcp'))
-            : ('bsbord FAIL ' . implode(';', array_slice($notes, 0, 12)));
+            ? ('bsbord БС PASS ops=' . implode(',', $passed) . ' min=' . $minPass)
+            : ('bsbord БС FAIL need≥' . $minPass . ' ' . implode(';', array_slice($notes, 0, 16)));
 
         return [
             'ok' => $ok,
@@ -170,17 +280,5 @@ final class BsbordClient
             'detail' => $detail,
             'raw' => $json,
         ];
-    }
-
-    /** @return list<string> */
-    private function operatorFilter(): array
-    {
-        $raw = Settings::get('BSBORD_OPERATORS', Env::get('BSBORD_OPERATORS', ''));
-        if ($raw === null || trim($raw) === '') {
-            return [];
-        }
-        // Allow either full op_keys (mts|Мск|on) or short names (mts,beeline)
-        $parts = array_filter(array_map('trim', explode(',', $raw)));
-        return array_values($parts);
     }
 }

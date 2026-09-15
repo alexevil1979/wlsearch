@@ -1,41 +1,27 @@
-# BS-проверка: Android agent и bsbord.com
+# BS-проверка через bsbord.com
 
-## Режимы (`bs_mode`)
+В UI bsbord каналы делятся на:
 
-| Режим | Поведение |
-|-------|-----------|
-| `agent` | Termux phone-agent (как раньше) |
-| `bsbord` | Только API https://bsbord.com/v1/probe (мобильные каналы dpi=on) |
-| `both` | Сначала bsbord (1 раз); при FAIL ждём agent |
+| Метка | dpi | Использование в wlsearch |
+|-------|-----|---------------------------|
+| **БС** (зелёный) | `on` | **да** — только они |
+| **без БС** (оранжевый) | `off` | **нет** |
 
-Выбор в админке **Запуск** или CLI: `--bs-mode=bsbord`.
+## Настройка
 
-## Настройка bsbord
+1. Токен уже в `.env` / Настройки → `BSBORD_API_TOKEN`
+2. Откройте **Настройки** → блок операторов **БС**
+3. Кнопка «Выбрать МегаФон + МТС + Билайн ЦФО (БС)» или отметьте вручную
+4. `BS_MODE_DEFAULT=bsbord` (или both)
+5. Запуск прогона с `bs_mode=bsbord`
 
-В `.env` (или Настройки в админке):
+## API
 
-```env
-BSBORD_API_BASE=https://bsbord.com/v1
-BSBORD_API_TOKEN=bsk_live_...
-BSBORD_OPERATORS=
-BS_MODE_DEFAULT=agent
+```http
+GET  /v1/operators?dpi=on
+POST /v1/probe
+Authorization: Bearer bsk_live_…
+{ "target":"http://IP/", "dpi":"on", "operators":["…|on"], "tcp_port":80, "probes":{"tcp":true} }
 ```
 
-Токен: кабинет bsbord → API key (`Authorization: Bearer …`).
-
-`BSBORD_OPERATORS` — опциональный фильтр (полные `op_key` через запятую). Пусто = все доступные с `dpi=on`.
-
-## Критерий PASS (bsbord)
-
-После `control_ok` оркестратор вызывает:
-
-`POST https://bsbord.com/v1/probe`  
-тело: `target=http://<ip>/`, `dpi=on`, `tcp_port=80`, `probes.tcp=true`.
-
-PASS если хотя бы один leg с **dpi=on** даёт TCP/HTTP ok (маркер `WL_PROBE_OK` в `body_head` — плюс, не обязателен: маркер уже проверен control-check).
-
-## Миграция
-
-```bash
-./bin/wlsearch-run migrate
-```
+PASS: `control_ok` ∧ ≥ `BSBORD_MIN_PASS` операторов БС с TCP/HTTP ok.
