@@ -6,6 +6,7 @@ namespace Wlsearch\Task;
 
 use PDO;
 use Wlsearch\Inventory\InventoryService;
+use Wlsearch\CheckedIp\CheckedIpService;
 use Wlsearch\Notify\TelegramNotifier;
 use Wlsearch\Support\Audit;
 use Wlsearch\Support\Database;
@@ -17,15 +18,18 @@ final class TaskService
     private PDO $pdo;
     private InventoryService $inventory;
     private TelegramNotifier $tg;
+    private CheckedIpService $checkedIps;
 
     public function __construct(
         ?PDO $pdo = null,
         ?InventoryService $inventory = null,
         ?TelegramNotifier $tg = null,
+        ?CheckedIpService $checkedIps = null,
     ) {
         $this->pdo = $pdo ?? Database::pdo();
         $this->inventory = $inventory ?? new InventoryService($this->pdo);
         $this->tg = $tg ?? new TelegramNotifier();
+        $this->checkedIps = $checkedIps ?? new CheckedIpService($this->pdo);
     }
 
     public function ensureTaskForRun(int $runId, string $ipv4): int
@@ -151,6 +155,14 @@ final class TaskService
                 $run['asn_org'] !== null ? (string) $run['asn_org'] : null,
                 $operator,
             );
+            $this->checkedIps->record(
+                (string) $run['ipv4'],
+                'pass',
+                (string) $run['provider'],
+                $run['asn'] !== null ? (int) $run['asn'] : null,
+                $runId,
+                'agent:' . $operator
+            );
 
             $this->tg->send("wlsearch: PASS (agent) run #{$runId} ip={$run['ipv4']} operator={$operator}");
             Audit::log('device:' . $deviceId, 'run.pass', 'run', (string) $runId, ['operator' => $operator]);
@@ -162,6 +174,17 @@ final class TaskService
             "UPDATE runs SET bs_ok = 0, cellular_ok = ?, state = 'FAIL_BS', verdict = 'FAIL_BS',
                     error_message = ?, updated_at = NOW() WHERE id = ?"
         )->execute([$cellular ? 1 : 0, mb_substr($reason, 0, 2000), $runId]);
+
+        if (!empty($run['ipv4'])) {
+            $this->checkedIps->record(
+                (string) $run['ipv4'],
+                'fail_bs',
+                (string) $run['provider'],
+                $run['asn'] !== null ? (int) $run['asn'] : null,
+                $runId,
+                $reason
+            );
+        }
 
         $this->tg->send("wlsearch: FAIL_BS run #{$runId} ip=" . ($run['ipv4'] ?? '-') . " — {$reason}");
         Audit::log('device:' . $deviceId, 'run.fail_bs', 'run', (string) $runId, ['reason' => $reason]);
@@ -191,6 +214,10 @@ final class TaskService
                 "UPDATE runs SET bs_ok = 0, state = 'FAIL_BS', verdict = 'FAIL_BS',
                         error_message = 'BS task expired (no agent result)', updated_at = NOW() WHERE id = ?"
             )->execute([$task['run_id']]);
+
+            if (!empty($task['ipv4'])) {
+                $this->checkedIps->record((string) $task['ipv4'], 'fail_bs', null, null, (int) $task['run_id'], 'BS task expired');
+            }
 
             if (!(int) $task['keep_on_fail']) {
                 $this->pdo->prepare("UPDATE runs SET state = 'DESTROYING', updated_at = NOW() WHERE id = ?")

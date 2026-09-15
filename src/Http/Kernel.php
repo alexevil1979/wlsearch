@@ -9,6 +9,7 @@ use Wlsearch\Http\Controllers\AgentController;
 use Wlsearch\Http\Controllers\AuditController;
 use Wlsearch\Http\Controllers\AuthController;
 use Wlsearch\Http\Controllers\BlacklistController;
+use Wlsearch\Http\Controllers\CheckedIpsController;
 use Wlsearch\Http\Controllers\DashboardController;
 use Wlsearch\Http\Controllers\DevicesController;
 use Wlsearch\Http\Controllers\HealthController;
@@ -37,6 +38,7 @@ final class Kernel
         $dash = new DashboardController();
         $runs = new RunsController();
         $inventory = new InventoryController();
+        $checkedIps = new CheckedIpsController();
         $devices = new DevicesController();
         $settings = new SettingsController();
         $blacklist = new BlacklistController();
@@ -69,6 +71,9 @@ final class Kernel
 
         $router->get('/inventory', [$inventory, 'index']);
         $router->post('/inventory/{id}/retire', [$inventory, 'retire']);
+
+        $router->get('/checked-ips', [$checkedIps, 'index']);
+        $router->post('/checked-ips/{ipv4}/delete', [$checkedIps, 'delete']);
 
         $router->get('/devices', [$devices, 'index']);
         $router->post('/devices', [$devices, 'create']);

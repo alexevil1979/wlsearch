@@ -6,6 +6,7 @@ namespace Wlsearch\Worker;
 
 use PDO;
 use Wlsearch\Blacklist\BlacklistService;
+use Wlsearch\CheckedIp\CheckedIpService;
 use Wlsearch\Inventory\InventoryService;
 use Wlsearch\Notify\TelegramNotifier;
 use Wlsearch\Probe\BsbordClient;
@@ -30,6 +31,7 @@ final class Worker
     private BlacklistService $blacklist;
     private BsbordClient $bsbord;
     private InventoryService $inventory;
+    private CheckedIpService $checkedIps;
 
     public function __construct(
         ?PDO $pdo = null,
@@ -40,6 +42,7 @@ final class Worker
         ?BlacklistService $blacklist = null,
         ?BsbordClient $bsbord = null,
         ?InventoryService $inventory = null,
+        ?CheckedIpService $checkedIps = null,
     ) {
         $this->pdo = $pdo ?? Database::pdo();
         $this->runs = $runs ?? new RunService($this->pdo);
@@ -49,6 +52,7 @@ final class Worker
         $this->blacklist = $blacklist ?? new BlacklistService($this->pdo);
         $this->bsbord = $bsbord ?? new BsbordClient();
         $this->inventory = $inventory ?? new InventoryService($this->pdo);
+        $this->checkedIps = $checkedIps ?? new CheckedIpService($this->pdo);
     }
 
     public function tick(): int
@@ -173,7 +177,26 @@ final class Worker
                     'UPDATE runs SET ipv4 = ?, asn = ?, asn_org = ? WHERE id = ?'
                 );
                 $stmt->execute([$info->ipv4, $asn, $asnOrg, $id]);
+                $this->checkedIps->record(
+                    $info->ipv4,
+                    'fail_seen',
+                    (string) $run['provider'],
+                    $asn,
+                    $id,
+                    'blacklist: ' . ($bl['reason'] ?? 'blocked')
+                );
                 $this->failRun($id, 'ERROR', 'blacklist: ' . ($bl['reason'] ?? 'blocked'));
+                return;
+            }
+
+            $known = $this->checkedIps->shouldDestroyImmediately($info->ipv4);
+            if ($known !== null) {
+                $stmt = $this->pdo->prepare(
+                    'UPDATE runs SET ipv4 = ?, asn = ?, asn_org = ? WHERE id = ?'
+                );
+                $stmt->execute([$info->ipv4, $asn, $asnOrg !== null ? mb_substr($asnOrg, 0, 128) : null, $id]);
+                fwrite(STDOUT, "run #{$id}: known IP {$info->ipv4} → destroy ({$known})\n");
+                $this->failRun($id, 'ERROR', 'known IP skip: ' . $known);
                 return;
             }
         }
@@ -331,6 +354,14 @@ final class Worker
                 $ops,
                 'bsbord: ' . $result['detail'],
             );
+            $this->checkedIps->record(
+                $ipv4,
+                'pass',
+                (string) $run['provider'],
+                $run['asn'] !== null ? (int) $run['asn'] : null,
+                $id,
+                $result['detail']
+            );
 
             $this->tg->send("wlsearch: PASS (bsbord) run #{$id} ip={$ipv4} ops={$ops}");
             Audit::log('bsbord', 'run.pass', 'run', (string) $id, ['operators' => $ops]);
@@ -363,6 +394,18 @@ final class Worker
         );
         $stmt->execute([mb_substr($message, 0, 2000), $id]);
         $this->tg->send("wlsearch: FAIL_BS (bsbord) run #{$id} — {$message}");
+
+        $ipv4 = (string) ($run['ipv4'] ?? '');
+        if ($ipv4 !== '') {
+            $this->checkedIps->record(
+                $ipv4,
+                'fail_bs',
+                (string) ($run['provider'] ?? null),
+                $run['asn'] !== null ? (int) $run['asn'] : null,
+                $id,
+                $message
+            );
+        }
 
         if (!(int) $run['keep_on_fail']) {
             $this->setState($id, 'DESTROYING');
@@ -403,6 +446,18 @@ final class Worker
         $stmt->execute(['FAIL_CONTROL', 'FAIL_CONTROL', mb_substr($message, 0, 2000), $id]);
         $this->tg->send("wlsearch: FAIL_CONTROL run #{$id} ip=" . ($run['ipv4'] ?? '-') . ' — ' . $message);
 
+        $ipv4 = (string) ($run['ipv4'] ?? '');
+        if ($ipv4 !== '') {
+            $this->checkedIps->record(
+                $ipv4,
+                'fail_control',
+                (string) ($run['provider'] ?? null),
+                $run['asn'] !== null ? (int) $run['asn'] : null,
+                $id,
+                $message
+            );
+        }
+
         if (!(int) $run['keep_on_fail']) {
             $this->setState($id, 'DESTROYING');
         }
@@ -417,8 +472,21 @@ final class Worker
         $this->tg->send("wlsearch: {$verdict} run #{$id} — {$message}");
 
         $run = $this->runs->get($id);
-        if ($run && !(int) $run['keep_on_fail'] && !empty($run['provider_server_id']) && empty($run['destroyed_at'])) {
-            $this->setState($id, 'DESTROYING');
+        if ($run) {
+            $ipv4 = (string) ($run['ipv4'] ?? '');
+            if ($ipv4 !== '' && !str_starts_with($message, 'known IP skip:')) {
+                $this->checkedIps->record(
+                    $ipv4,
+                    'error',
+                    (string) ($run['provider'] ?? null),
+                    $run['asn'] !== null ? (int) $run['asn'] : null,
+                    $id,
+                    $message
+                );
+            }
+            if (!(int) $run['keep_on_fail'] && !empty($run['provider_server_id']) && empty($run['destroyed_at'])) {
+                $this->setState($id, 'DESTROYING');
+            }
         }
     }
 

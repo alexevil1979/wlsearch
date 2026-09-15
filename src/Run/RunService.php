@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Wlsearch\Run;
 
 use PDO;
+use Wlsearch\CheckedIp\CheckedIpService;
 use Wlsearch\Inventory\InventoryService;
 use Wlsearch\Notify\TelegramNotifier;
 use Wlsearch\Probe\BsbordClient;
@@ -241,6 +242,14 @@ final class RunService
                 mb_substr('bsbord error: ' . $e->getMessage(), 0, 2000),
                 $runId,
             ]);
+            (new CheckedIpService($this->pdo))->record(
+                $ipv4,
+                'fail_bs',
+                (string) $run['provider'],
+                $run['asn'] !== null ? (int) $run['asn'] : null,
+                $runId,
+                'bsbord error: ' . $e->getMessage()
+            );
             throw new \RuntimeException('bsbord error: ' . $e->getMessage());
         }
 
@@ -267,6 +276,14 @@ final class RunService
                 $ops,
                 'bsbord retest: ' . $result['detail'],
             );
+            (new CheckedIpService($this->pdo))->record(
+                $ipv4,
+                'pass',
+                (string) $run['provider'],
+                $run['asn'] !== null ? (int) $run['asn'] : null,
+                $runId,
+                $result['detail']
+            );
             $this->tg->send("wlsearch: PASS (retest bsbord) run #{$runId} ip={$ipv4} ops={$ops}");
             return 'PASS: ' . $result['detail'];
         }
@@ -283,6 +300,14 @@ final class RunService
             $ipv4,
             $actor,
             'retest FAIL_BS'
+        );
+        (new CheckedIpService($this->pdo))->record(
+            $ipv4,
+            'fail_bs',
+            (string) $run['provider'],
+            $run['asn'] !== null ? (int) $run['asn'] : null,
+            $runId,
+            $result['detail']
         );
         $this->tg->send("wlsearch: FAIL_BS (retest bsbord) run #{$runId} — {$detail}");
         return 'FAIL_BS: ' . $result['detail'];
