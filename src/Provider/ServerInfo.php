@@ -14,17 +14,33 @@ final class ServerInfo
     ) {
     }
 
+    /** Timeweb: no_paid = «Не оплачен» в ЛК */
+    public function isUnpaidOrBlocked(): bool
+    {
+        $s = strtolower(trim($this->status));
+        return in_array($s, [
+            'no_paid',
+            'nopaid',
+            'not_paid',
+            'unpaid',
+            'blocked',
+            'permanent_blocked',
+            'permanently_blocked',
+        ], true)
+            || str_contains($s, 'no_paid')
+            || str_contains($s, 'unpaid');
+    }
+
     public function isReady(): bool
     {
         if ($this->ipv4 === null || $this->ipv4 === '') {
             return false;
         }
-        $s = strtolower(trim($this->status));
-        // Timeweb: on = готово; installing/turning_on = ещё нет
-        if (in_array($s, ['installing', 'turning_on', 'turning_off', 'hard_rebooting', 'soft_rebooting', 'off', 'blocked', 'unknown', ''], true)) {
+        if ($this->isUnpaidOrBlocked()) {
             return false;
         }
-        return in_array($s, ['on', 'active', 'running', 'started', 'ok'], true)
-            || (!str_contains($s, 'install') && !str_contains($s, 'off') && !str_contains($s, 'reboot'));
+        $s = strtolower(trim($this->status));
+        // Только явно рабочие статусы — иначе no_paid/configuring ошибочно считались ready
+        return in_array($s, ['on', 'active', 'running', 'started', 'ok'], true);
     }
 }

@@ -164,6 +164,20 @@ final class Worker
         $provider = ProviderFactory::make((string) $run['provider']);
         $info = $provider->get($serverId);
 
+        if ($info->isUnpaidOrBlocked()) {
+            $stmt = $this->pdo->prepare(
+                'UPDATE runs SET ipv4 = ?, updated_at = NOW() WHERE id = ?'
+            );
+            $stmt->execute([$info->ipv4, $id]);
+            fwrite(STDOUT, "run #{$id}: provider status={$info->status} (unpaid/blocked) → destroy\n");
+            $this->failRun(
+                $id,
+                'ERROR',
+                'Timeweb status=' . $info->status . ' (Не оплачен/заблокирован) — пополните баланс ≈30 дней тарифа'
+            );
+            return;
+        }
+
         $asn = null;
         $asnOrg = null;
         if ($info->ipv4) {
@@ -238,6 +252,24 @@ final class Worker
         if ($ipv4 === '') {
             $this->setState($id, 'PROVISIONING');
             return;
+        }
+
+        $serverId = (string) ($run['provider_server_id'] ?? '');
+        if ($serverId !== '') {
+            try {
+                $info = ProviderFactory::make((string) $run['provider'])->get($serverId);
+                if ($info->isUnpaidOrBlocked()) {
+                    fwrite(STDOUT, "run #{$id}: bootstrap abort status={$info->status}\n");
+                    $this->failRun(
+                        $id,
+                        'ERROR',
+                        'Timeweb status=' . $info->status . ' (Не оплачен/заблокирован) во время bootstrap'
+                    );
+                    return;
+                }
+            } catch (\Throwable $e) {
+                fwrite(STDERR, "run #{$id}: provider get during bootstrap: " . $e->getMessage() . "\n");
+            }
         }
 
         $result = $this->control->check($ipv4);
