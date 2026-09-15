@@ -64,9 +64,11 @@ final class TimewebProvider implements ProviderInterface
         }
 
         if ($this->ensureIpv4()) {
+            $az = (string) ($zone ?? Env::get('TIMEWEB_AVAILABILITY_ZONE', 'spb-3') ?? 'spb-3');
             $floatingId = Env::get('TIMEWEB_FLOATING_IP_ID', '') ?? '';
             if ($floatingId === '') {
-                $floatingId = $this->createFloatingIp((string) ($zone ?? Env::get('TIMEWEB_AVAILABILITY_ZONE', 'spb-3')));
+                // Prefer already paid free IP (e.g. leftover after destroy) before ordering a new one
+                $floatingId = $this->findFreeFloatingIpId($az) ?? $this->createFloatingIp($az);
             }
             if ($floatingId !== '') {
                 $body['network'] = ['floating_ip' => $floatingId];
@@ -75,7 +77,10 @@ final class TimewebProvider implements ProviderInterface
 
         $resp = $this->http->request('POST', $this->base . '/servers', $body);
         if ($resp['status'] < 200 || $resp['status'] >= 300) {
-            throw new \RuntimeException('Timeweb create failed HTTP ' . $resp['status'] . ': ' . $resp['body']);
+            $hint = $resp['status'] === 402
+                ? ' (недостаточно средств Timeweb — пополните баланс; HTTP 402 Payment Required)'
+                : '';
+            throw new \RuntimeException('Timeweb create failed HTTP ' . $resp['status'] . $hint . ': ' . $resp['body']);
         }
 
         $json = json_decode($resp['body'], true);
@@ -277,6 +282,53 @@ final class TimewebProvider implements ProviderInterface
         return Env::get('TIMEWEB_AVAILABILITY_ZONE', 'spb-3') ?? 'spb-3';
     }
 
+    private function findFreeFloatingIpId(string $zone): ?string
+    {
+        foreach ($this->listFloatingIps() as $row) {
+            $rid = $row['resource_id'] ?? null;
+            $rtype = $row['resource_type'] ?? null;
+            $bound = ($rid !== null && $rid !== '' && $rid !== 0)
+                || ($rtype !== null && $rtype !== '');
+            if ($bound) {
+                continue;
+            }
+            $az = (string) ($row['availability_zone'] ?? '');
+            if ($az !== '' && $az !== $zone) {
+                continue;
+            }
+            $id = (string) ($row['id'] ?? '');
+            if ($id !== '') {
+                return $id;
+            }
+        }
+        return null;
+    }
+
+    /** @return list<array<string, mixed>> */
+    private function listFloatingIps(): array
+    {
+        try {
+            $resp = $this->http->request('GET', $this->base . '/floating-ips');
+            if ($resp['status'] < 200 || $resp['status'] >= 300) {
+                return [];
+            }
+            $json = json_decode($resp['body'], true);
+            $list = $json['ips'] ?? $json['floating_ips'] ?? $json;
+            if (!is_array($list)) {
+                return [];
+            }
+            $out = [];
+            foreach ($list as $row) {
+                if (is_array($row)) {
+                    $out[] = $row;
+                }
+            }
+            return $out;
+        } catch (\Throwable) {
+            return [];
+        }
+    }
+
     private function createFloatingIp(string $zone): string
     {
         $resp = $this->http->request('POST', $this->base . '/floating-ips', [
@@ -285,7 +337,12 @@ final class TimewebProvider implements ProviderInterface
             'comment' => 'wlsearch',
         ]);
         if ($resp['status'] < 200 || $resp['status'] >= 300) {
-            throw new \RuntimeException('Timeweb floating IP create failed HTTP ' . $resp['status'] . ': ' . $resp['body']);
+            $hint = $resp['status'] === 402
+                ? ' (недостаточно средств Timeweb на новый IPv4)'
+                : '';
+            throw new \RuntimeException(
+                'Timeweb floating IP create failed HTTP ' . $resp['status'] . $hint . ': ' . $resp['body']
+            );
         }
         $json = json_decode($resp['body'], true);
         if (!is_array($json)) {
@@ -328,7 +385,7 @@ final class TimewebProvider implements ProviderInterface
             return;
         }
 
-        $fipId = $this->createFloatingIp($zone);
+        $fipId = $this->findFreeFloatingIpId($zone) ?? $this->createFloatingIp($zone);
         $bind = $this->http->request(
             'POST',
             $this->base . '/floating-ips/' . rawurlencode($fipId) . '/bind',
@@ -346,28 +403,12 @@ final class TimewebProvider implements ProviderInterface
 
     private function hasFloatingIpForServer(string $serverId): bool
     {
-        try {
-            $resp = $this->http->request('GET', $this->base . '/floating-ips');
-            if ($resp['status'] < 200 || $resp['status'] >= 300) {
-                return false;
+        foreach ($this->listFloatingIps() as $row) {
+            $rid = (string) ($row['resource_id'] ?? '');
+            $rtype = strtolower((string) ($row['resource_type'] ?? ''));
+            if ($rid !== '' && $rid === $serverId && ($rtype === '' || $rtype === 'server')) {
+                return true;
             }
-            $json = json_decode($resp['body'], true);
-            $list = $json['ips'] ?? $json['floating_ips'] ?? $json;
-            if (!is_array($list)) {
-                return false;
-            }
-            foreach ($list as $row) {
-                if (!is_array($row)) {
-                    continue;
-                }
-                $rid = (string) ($row['resource_id'] ?? '');
-                $rtype = strtolower((string) ($row['resource_type'] ?? ''));
-                if ($rid !== '' && $rid === $serverId && ($rtype === '' || $rtype === 'server')) {
-                    return true;
-                }
-            }
-        } catch (\Throwable) {
-            return false;
         }
         return false;
     }

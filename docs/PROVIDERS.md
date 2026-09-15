@@ -7,8 +7,9 @@
 
 - Base: `TIMEWEB_API_BASE` (default `https://api.timeweb.cloud/api/v1`)
 - `TIMEWEB_API_TOKEN`, `TIMEWEB_PRESET_ID`, `TIMEWEB_OS_ID`, `TIMEWEB_AVAILABILITY_ZONE`
-- **`TIMEWEB_ENSURE_IPV4=1`** (по умолчанию) — при создании VPS заказывается плавающий **IPv4** и привязывается к серверу. Без этого Timeweb может выдать только IPv6, и прогон зависнет в `PROVISIONING` (wlsearch проверяет `http://IPv4/`).
-- Опционально `TIMEWEB_FLOATING_IP_ID` — привязать существующий свободный floating IP вместо создания нового.
+- **`TIMEWEB_ENSURE_IPV4=1`** (по умолчанию) — при создании VPS нужен публичный **IPv4**. Сначала берётся **свободный** floating IP на аккаунте (статус «Не подключен»), иначе заказывается новый (~180 ₽/мес).
+- Опционально `TIMEWEB_FLOATING_IP_ID` — принудительно использовать конкретный floating IP.
+- **HTTP 402** при create = недостаточно средств в Timeweb. Пополните баланс (VPS + IP).
 - Docs: https://timeweb.cloud/api-docs
 
 ## Selectel OpenStack
