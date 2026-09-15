@@ -23,7 +23,6 @@ $bsSelected = $bsSelected ?? [];
             'MAX_PARALLEL_VMS' => 'Макс. параллельных VM',
             'MAX_CREATES_PER_DAY' => 'Макс. create в сутки',
             'MAX_DAILY_SPEND_RUB' => 'Макс. оценка spend ₽/сутки',
-            'TELEGRAM_CHAT_ID' => 'Telegram chat id',
             'BS_TASK_TTL_SEC' => 'TTL BS-задачи (сек)',
             'PROVISION_TIMEOUT_SEC' => 'Timeout provision (сек)',
             'BOOTSTRAP_TIMEOUT_SEC' => 'Timeout bootstrap (сек)',
@@ -37,6 +36,24 @@ $bsSelected = $bsSelected ?? [];
             <input id="<?= View::e($key) ?>" name="<?= View::e($key) ?>" type="text"
                    value="<?= View::e((string) ($values[$key] ?? '')) ?>">
         <?php endforeach; ?>
+
+        <h2 style="margin-top:1.4rem">Telegram</h2>
+        <p class="muted" style="margin:0 0 0.75rem">
+            Уведомления о PASS/FAIL. Прокси Bot API — как в botfabric (socks5h на локальный туннель).
+            Пустой прокси = прямой доступ к <code>api.telegram.org</code>.
+        </p>
+        <label for="TELEGRAM_BOT_TOKEN">Токен бота (API)</label>
+        <input id="TELEGRAM_BOT_TOKEN" name="TELEGRAM_BOT_TOKEN" type="password"
+               value="<?= View::e((string) ($values['TELEGRAM_BOT_TOKEN'] ?? '')) ?>"
+               autocomplete="off" placeholder="123456:AA…">
+        <label for="TELEGRAM_CHAT_ID">Chat id</label>
+        <input id="TELEGRAM_CHAT_ID" name="TELEGRAM_CHAT_ID" type="text"
+               value="<?= View::e((string) ($values['TELEGRAM_CHAT_ID'] ?? '')) ?>"
+               placeholder="-100… или личный id">
+        <label for="TELEGRAM_PROXY">Прокси Bot API (как botfabric)</label>
+        <input id="TELEGRAM_PROXY" name="TELEGRAM_PROXY" type="text"
+               value="<?= View::e((string) (($values['TELEGRAM_PROXY'] ?? '') !== '' ? $values['TELEGRAM_PROXY'] : 'socks5h://127.0.0.1:1080')) ?>"
+               placeholder="socks5h://127.0.0.1:1080">
 
         <h2 style="margin-top:1.4rem">Timeweb VPS</h2>
         <p class="muted" style="margin:0 0 0.75rem">

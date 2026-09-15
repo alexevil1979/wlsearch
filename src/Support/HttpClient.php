@@ -11,11 +11,15 @@ final class HttpClient
 
     private int $timeout;
 
+    private ?string $proxy;
+
     /** @param list<string> $defaultHeaders */
-    public function __construct(array $defaultHeaders = [], int $timeout = 60)
+    public function __construct(array $defaultHeaders = [], int $timeout = 60, ?string $proxy = null)
     {
         $this->defaultHeaders = $defaultHeaders;
         $this->timeout = $timeout;
+        $proxy = $proxy !== null ? trim($proxy) : null;
+        $this->proxy = ($proxy !== null && $proxy !== '') ? $proxy : null;
     }
 
     /**
@@ -42,6 +46,11 @@ final class HttpClient
 
         if ($jsonBody !== null) {
             $opts[CURLOPT_POSTFIELDS] = json_encode($jsonBody, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        }
+
+        if ($this->proxy !== null) {
+            $opts[CURLOPT_PROXY] = $this->proxy;
+            $opts[CURLOPT_PROXYTYPE] = $this->proxyType($this->proxy);
         }
 
         curl_setopt_array($ch, $opts);
@@ -102,5 +111,17 @@ final class HttpClient
             return ['status' => 0, 'body' => '', 'error' => $error ?: 'request failed'];
         }
         return ['status' => $status, 'body' => $body, 'error' => null];
+    }
+
+    private function proxyType(string $proxy): int
+    {
+        $p = strtolower($proxy);
+        if (str_starts_with($p, 'socks5h://') || str_starts_with($p, 'socks5://')) {
+            return defined('CURLPROXY_SOCKS5_HOSTNAME') ? CURLPROXY_SOCKS5_HOSTNAME : CURLPROXY_SOCKS5;
+        }
+        if (str_starts_with($p, 'socks4://') || str_starts_with($p, 'socks4a://')) {
+            return defined('CURLPROXY_SOCKS4A') ? CURLPROXY_SOCKS4A : CURLPROXY_SOCKS4;
+        }
+        return CURLPROXY_HTTP;
     }
 }

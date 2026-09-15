@@ -20,7 +20,9 @@ final class SettingsController
         'MAX_PARALLEL_VMS',
         'MAX_CREATES_PER_DAY',
         'MAX_DAILY_SPEND_RUB',
+        'TELEGRAM_BOT_TOKEN',
         'TELEGRAM_CHAT_ID',
+        'TELEGRAM_PROXY',
         'BS_TASK_TTL_SEC',
         'PROVISION_TIMEOUT_SEC',
         'BOOTSTRAP_TIMEOUT_SEC',
@@ -121,7 +123,8 @@ final class SettingsController
             }
             $val = trim((string) $_POST[$key]);
             $stmt->execute([$key, $val]);
-            $changed[$key] = $key === 'BSBORD_API_TOKEN' && $val !== '' ? '(set)' : $val;
+            $secretKeys = ['BSBORD_API_TOKEN', 'TELEGRAM_BOT_TOKEN'];
+            $changed[$key] = in_array($key, $secretKeys, true) && $val !== '' ? '(set)' : $val;
         }
 
         Settings::resetCache();

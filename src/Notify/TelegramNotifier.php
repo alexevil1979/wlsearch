@@ -14,12 +14,17 @@ final class TelegramNotifier
 
     public function __construct(?HttpClient $http = null)
     {
-        $this->http = $http ?? new HttpClient([], 20);
+        if ($http !== null) {
+            $this->http = $http;
+            return;
+        }
+        $proxy = Settings::get('TELEGRAM_PROXY', Env::get('TELEGRAM_PROXY', 'socks5h://127.0.0.1:1080'));
+        $this->http = new HttpClient([], 20, $proxy);
     }
 
     public function send(string $text): bool
     {
-        $token = Env::get('TELEGRAM_BOT_TOKEN', '');
+        $token = Settings::get('TELEGRAM_BOT_TOKEN', Env::get('TELEGRAM_BOT_TOKEN', ''));
         $chat = Settings::get('TELEGRAM_CHAT_ID', Env::get('TELEGRAM_CHAT_ID', ''));
         if ($token === null || $token === '' || $chat === null || $chat === '') {
             return false;
@@ -36,5 +41,12 @@ final class TelegramNotifier
         } catch (\Throwable) {
             return false;
         }
+    }
+
+    public function isConfigured(): bool
+    {
+        $token = Settings::get('TELEGRAM_BOT_TOKEN', Env::get('TELEGRAM_BOT_TOKEN', ''));
+        $chat = Settings::get('TELEGRAM_CHAT_ID', Env::get('TELEGRAM_CHAT_ID', ''));
+        return $token !== null && $token !== '' && $chat !== null && $chat !== '';
     }
 }
