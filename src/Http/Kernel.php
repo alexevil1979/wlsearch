@@ -66,6 +66,7 @@ final class Kernel
         $router->get('/runs', [$runs, 'index']);
         $router->get('/runs/new', [$runs, 'createForm']);
         $router->post('/runs', [$runs, 'create']);
+        $router->post('/runs/stop-queue', [$runs, 'stopQueue']);
         $router->post('/runs/{id}/destroy', [$runs, 'destroy']);
         $router->post('/runs/{id}/keep', [$runs, 'keep']);
         $router->post('/runs/{id}/retry-control', [$runs, 'retryControl']);

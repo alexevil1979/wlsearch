@@ -228,10 +228,16 @@ final class TimewebProvider implements ProviderInterface
     public function destroy(string $serverId): void
     {
         $floatingIds = $this->floatingIpIdsForServer($serverId);
+        FileLog::write('timeweb', 'destroy:start', [
+            'server_id' => $serverId,
+            'floating_ids' => $floatingIds,
+            'account' => $this->cfg->logTag(),
+        ]);
 
         $resp = $this->http->request('DELETE', $this->base . '/servers/' . rawurlencode($serverId));
         if ($resp['status'] === 404) {
             $this->maybeDeleteFloatingIps($floatingIds);
+            $this->cleanupOrphanFloatingIps();
             return;
         }
         if ($resp['status'] === 423) {
@@ -241,17 +247,28 @@ final class TimewebProvider implements ProviderInterface
             throw new \RuntimeException('Timeweb destroy failed HTTP ' . $resp['status'] . ': ' . $resp['body']);
         }
 
+        // Дать API отвязать IP от сервера, затем удалить FIP
+        usleep(800000);
         $this->maybeDeleteFloatingIps($floatingIds);
+        // Повторно собрать id (resource_id мог быть int/string)
+        usleep(400000);
+        $again = $this->floatingIpIdsForServer($serverId);
+        if ($again !== []) {
+            $this->maybeDeleteFloatingIps($again);
+        }
+        $this->cleanupOrphanFloatingIps();
+        FileLog::write('timeweb', 'destroy:done', ['server_id' => $serverId, 'account' => $this->cfg->logTag()]);
     }
 
     /** @return list<string> */
     private function floatingIpIdsForServer(string $serverId): array
     {
         $ids = [];
+        $sid = (string) $serverId;
         foreach ($this->listFloatingIps() as $row) {
             $rid = (string) ($row['resource_id'] ?? '');
             $rtype = strtolower((string) ($row['resource_type'] ?? ''));
-            if ($rid === $serverId && ($rtype === '' || $rtype === 'server')) {
+            if ($rid !== '' && $rid === $sid && ($rtype === '' || $rtype === 'server')) {
                 $id = (string) ($row['id'] ?? '');
                 if ($id !== '') {
                     $ids[] = $id;
@@ -265,20 +282,64 @@ final class TimewebProvider implements ProviderInterface
     private function maybeDeleteFloatingIps(array $ids): void
     {
         // Default ON: drop floating IP with VPS after FAIL_BS — reuse бесполезен для лотереи БС.
-        // TIMEWEB_DELETE_FLOATING_IP_ON_DESTROY=0 только если сознательно копите пул IP (упираетесь в daily limit).
         if (!$this->cfg->bool('TIMEWEB_DELETE_FLOATING_IP_ON_DESTROY', true)) {
             return;
         }
         $pinned = trim($this->cfg->get('TIMEWEB_FLOATING_IP_ID', '') ?? '');
         foreach ($ids as $id) {
             if ($pinned !== '' && $id === $pinned) {
-                continue; // never delete explicitly pinned IP
+                continue;
             }
-            try {
-                $this->http->request('DELETE', $this->base . '/floating-ips/' . rawurlencode($id));
-            } catch (\Throwable) {
-                // best-effort
+            $this->deleteFloatingIpWithUnbind($id);
+        }
+    }
+
+    private function deleteFloatingIpWithUnbind(string $id): void
+    {
+        try {
+            // unbind best-effort if still attached
+            $this->http->request('POST', $this->base . '/floating-ips/' . rawurlencode($id) . '/unbind', []);
+        } catch (\Throwable) {
+        }
+        try {
+            $resp = $this->http->request('DELETE', $this->base . '/floating-ips/' . rawurlencode($id));
+            FileLog::write('timeweb', 'floating_ip:delete', [
+                'id' => $id,
+                'http' => $resp['status'],
+                'body' => mb_substr($resp['body'], 0, 500),
+            ]);
+        } catch (\Throwable $e) {
+            FileLog::write('timeweb', 'floating_ip:delete_error', ['id' => $id, 'error' => $e->getMessage()]);
+        }
+    }
+
+    /**
+     * Свободные FIP с comment wlsearch (после кривого destroy) — удалить, чтобы второй create брал новый IP как первый.
+     */
+    private function cleanupOrphanFloatingIps(): void
+    {
+        if (!$this->cfg->bool('TIMEWEB_DELETE_FLOATING_IP_ON_DESTROY', true)) {
+            return;
+        }
+        $pinned = trim($this->cfg->get('TIMEWEB_FLOATING_IP_ID', '') ?? '');
+        foreach ($this->listFloatingIps() as $row) {
+            $rid = $row['resource_id'] ?? null;
+            $rtype = $row['resource_type'] ?? null;
+            $bound = ($rid !== null && $rid !== '' && $rid !== 0)
+                || ($rtype !== null && $rtype !== '');
+            if ($bound) {
+                continue;
             }
+            $id = (string) ($row['id'] ?? '');
+            if ($id === '' || ($pinned !== '' && $id === $pinned)) {
+                continue;
+            }
+            $comment = strtolower((string) ($row['comment'] ?? ''));
+            // удаляем только наши / безымянные свободные в зоне аккаунта — не чужие
+            if ($comment !== '' && !str_contains($comment, 'wlsearch')) {
+                continue;
+            }
+            $this->deleteFloatingIpWithUnbind($id);
         }
     }
 
@@ -718,9 +779,16 @@ final class TimewebProvider implements ProviderInterface
             return;
         }
         if ($this->hasFloatingIpForServer($serverId)) {
-            return;
+            // уже привязан — подождать появления в /ips
+            for ($i = 0; $i < 5; $i++) {
+                usleep(700000);
+                if ($this->fetchIpv4FromIpsEndpoint($serverId) !== null) {
+                    return;
+                }
+            }
         }
 
+        $serversIpsHint = '';
         $resp = $this->http->request(
             'POST',
             $this->base . '/servers/' . rawurlencode($serverId) . '/ips',
@@ -731,23 +799,54 @@ final class TimewebProvider implements ProviderInterface
             'http' => $resp['status'],
             'body' => mb_substr($resp['body'], 0, 1500),
         ]);
-        if ($resp['status'] >= 200 && $resp['status'] < 300) {
-            return;
-        }
-
         $serversIpsHint = 'servers/ips HTTP ' . $resp['status'] . ': ' . mb_substr($resp['body'], 0, 400);
 
-        try {
-            $fip = $this->findFreeFloatingIp($zone) ?? $this->createFloatingIp($zone);
-        } catch (\Throwable $e) {
-            throw new \RuntimeException(
-                $e->getMessage() . ' | fallback after ' . $serversIpsHint,
-                0,
-                $e
-            );
+        if ($resp['status'] >= 200 && $resp['status'] < 300) {
+            for ($i = 0; $i < 8; $i++) {
+                usleep(800000);
+                if ($this->fetchIpv4FromIpsEndpoint($serverId) !== null) {
+                    FileLog::write('timeweb', 'attach_ipv4:servers_ips_ok', ['server_id' => $serverId, 'try' => $i]);
+                    return;
+                }
+            }
+            // API сказала OK, но IPv4 нет — как в первом успешном пути: floating IP + bind
+            FileLog::write('timeweb', 'attach_ipv4:servers_ips_no_ipv4', ['server_id' => $serverId]);
         }
+
+        // Всегда заказываем НОВЫЙ floating IP (как при первом успешном прогоне), без reuse чужого FAIL_BS
+        try {
+            $fip = $this->createFloatingIp($zone);
+        } catch (\Throwable $e) {
+            // если дневной лимит — последний шанс: свободный unbound в зоне
+            $msg = $e->getMessage();
+            if (str_contains($msg, 'daily_limit') || str_contains($msg, 'Daily limit')) {
+                $free = $this->findFreeFloatingIp($zone);
+                if ($free !== null) {
+                    FileLog::write('timeweb', 'attach_ipv4:reuse_free_after_limit', $free);
+                    $fip = $free;
+                } else {
+                    throw new \RuntimeException(
+                        $msg . ' | fallback after ' . $serversIpsHint,
+                        0,
+                        $e
+                    );
+                }
+            } else {
+                throw new \RuntimeException(
+                    $msg . ' | fallback after ' . $serversIpsHint,
+                    0,
+                    $e
+                );
+            }
+        }
+
         $fipId = $fip['id'];
-        FileLog::write('timeweb', 'attach_ipv4:bind', ['server_id' => $serverId, 'fip_id' => $fipId, 'ip' => $fip['ip']]);
+        FileLog::write('timeweb', 'attach_ipv4:bind', [
+            'server_id' => $serverId,
+            'fip_id' => $fipId,
+            'ip' => $fip['ip'] ?? null,
+            'account' => $this->cfg->logTag(),
+        ]);
         $bind = $this->http->request(
             'POST',
             $this->base . '/floating-ips/' . rawurlencode($fipId) . '/bind',
@@ -766,6 +865,16 @@ final class TimewebProvider implements ProviderInterface
                 . ' | after ' . $serversIpsHint
             );
         }
+
+        for ($i = 0; $i < 8; $i++) {
+            usleep(700000);
+            if ($this->fetchIpv4FromIpsEndpoint($serverId) !== null) {
+                return;
+            }
+        }
+        throw new \RuntimeException(
+            'IPv4 не появился после bind floating IP ' . $fipId . ' (' . ($fip['ip'] ?? '?') . ')'
+        );
     }
 
     private function hasFloatingIpForServer(string $serverId): bool

@@ -104,6 +104,25 @@ final class RunsController
         }
     }
 
+    public function stopQueue(): void
+    {
+        $this->requireAuth();
+        if (!Csrf::validate($_POST['_csrf'] ?? null)) {
+            Flash::set('error', 'Неверный CSRF-токен.');
+            header('Location: /runs');
+            exit;
+        }
+        $actor = (string) (AuthService::user()['login'] ?? 'admin');
+        try {
+            $r = (new RunService())->stopAllQueued($actor);
+            Flash::set('ok', "Очередь остановлена: SKIPPED={$r['skipped']}, destroy={$r['destroying']}.");
+        } catch (\Throwable $e) {
+            Flash::set('error', $e->getMessage());
+        }
+        header('Location: /runs');
+        exit;
+    }
+
     public function destroy(string $id): void
     {
         $this->action((int) $id, 'destroy');

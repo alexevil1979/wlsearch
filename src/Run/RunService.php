@@ -260,6 +260,42 @@ final class RunService
         return $stmt->rowCount();
     }
 
+    /**
+     * Остановить всё в очереди: ORDERING→SKIPPED; живые (кроме PASS/KEEP)→DESTROYING.
+     * @return array{skipped:int,destroying:int}
+     */
+    public function stopAllQueued(string $actor): array
+    {
+        $skip = $this->pdo->prepare(
+            "UPDATE runs SET state = 'SKIPPED', verdict = 'SKIPPED',
+                    error_message = 'остановлено вручную', updated_at = NOW()
+             WHERE state = 'ORDERING'"
+        );
+        $skip->execute();
+        $skipped = $skip->rowCount();
+
+        $idsStmt = $this->pdo->query(
+            "SELECT id FROM runs
+             WHERE state IN ('PROVISIONING','BOOTSTRAPPING','CONTROL_CHECK','BS_CHECK')
+                OR (state IN ('FAIL_BS','FAIL_CONTROL','ERROR') AND keep_on_fail = 0
+                    AND provider_server_id IS NOT NULL AND destroyed_at IS NULL)"
+        );
+        $ids = $idsStmt->fetchAll(PDO::FETCH_COLUMN) ?: [];
+        $destroying = 0;
+        foreach ($ids as $id) {
+            $this->updateState((int) $id, 'DESTROYING', null, 'остановлено вручную');
+            $destroying++;
+        }
+
+        Audit::log($actor, 'run.stop_all', 'runs', null, [
+            'skipped' => $skipped,
+            'destroying' => $destroying,
+        ]);
+        $this->tg->send("wlsearch: STOP очередь — skipped={$skipped} destroying={$destroying}");
+
+        return ['skipped' => $skipped, 'destroying' => $destroying];
+    }
+
     public function requestDestroy(int $runId, string $actor): void
     {
         $run = $this->get($runId);
