@@ -67,14 +67,11 @@ final class TimewebProvider implements ProviderInterface
 
         if ($this->ensureIpv4()) {
             $az = (string) ($zone ?? Env::get('TIMEWEB_AVAILABILITY_ZONE', 'spb-3') ?? 'spb-3');
-            $floatingId = Env::get('TIMEWEB_FLOATING_IP_ID', '') ?? '';
-            if ($floatingId === '') {
-                // Prefer already paid free IP (e.g. leftover after destroy) before ordering a new one
-                $floatingId = $this->findFreeFloatingIpId($az) ?? $this->createFloatingIp($az);
-            }
-            if ($floatingId !== '') {
-                $body['network'] = ['floating_ip' => $floatingId];
-                $floatingIdUsed = $floatingId;
+            $fip = $this->resolveFloatingIp($az);
+            if ($fip !== null) {
+                // Timeweb validates network.floating_ip as dotted IPv4, not UUID
+                $body['network'] = ['floating_ip' => $fip['ip']];
+                $floatingIdUsed = $fip['id'];
             }
         }
 
@@ -338,7 +335,52 @@ final class TimewebProvider implements ProviderInterface
         return Env::get('TIMEWEB_AVAILABILITY_ZONE', 'spb-3') ?? 'spb-3';
     }
 
-    private function findFreeFloatingIpId(string $zone): ?string
+    /**
+     * @return array{id: string, ip: string}|null
+     */
+    private function resolveFloatingIp(string $zone): ?array
+    {
+        $pinned = trim(Env::get('TIMEWEB_FLOATING_IP_ID', '') ?? '');
+        if ($pinned !== '') {
+            $fromPin = $this->floatingIpByPin($pinned, $zone);
+            if ($fromPin !== null) {
+                return $fromPin;
+            }
+        }
+
+        return $this->findFreeFloatingIp($zone) ?? $this->createFloatingIp($zone);
+    }
+
+    /**
+     * @return array{id: string, ip: string}|null
+     */
+    private function floatingIpByPin(string $pin, string $zone): ?array
+    {
+        if (filter_var($pin, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+            foreach ($this->listFloatingIps() as $row) {
+                $parsed = $this->parseFloatingIpRow($row);
+                if ($parsed !== null && $parsed['ip'] === $pin) {
+                    return $parsed;
+                }
+            }
+            return ['id' => $pin, 'ip' => $pin];
+        }
+
+        foreach ($this->listFloatingIps() as $row) {
+            $parsed = $this->parseFloatingIpRow($row);
+            if ($parsed !== null && $parsed['id'] === $pin) {
+                return $parsed;
+            }
+        }
+
+        $got = $this->getFloatingIp($pin);
+        return $got;
+    }
+
+    /**
+     * @return array{id: string, ip: string}|null
+     */
+    private function findFreeFloatingIp(string $zone): ?array
     {
         foreach ($this->listFloatingIps() as $row) {
             $rid = $row['resource_id'] ?? null;
@@ -352,12 +394,45 @@ final class TimewebProvider implements ProviderInterface
             if ($az !== '' && $az !== $zone) {
                 continue;
             }
-            $id = (string) ($row['id'] ?? '');
-            if ($id !== '') {
-                return $id;
+            $parsed = $this->parseFloatingIpRow($row);
+            if ($parsed !== null) {
+                return $parsed;
             }
         }
         return null;
+    }
+
+    /**
+     * @param array<string, mixed> $row
+     * @return array{id: string, ip: string}|null
+     */
+    private function parseFloatingIpRow(array $row): ?array
+    {
+        $id = (string) ($row['id'] ?? '');
+        $ip = (string) ($row['ip'] ?? $row['address'] ?? '');
+        if ($id === '' || !filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+            return null;
+        }
+        return ['id' => $id, 'ip' => $ip];
+    }
+
+    /** @return array{id: string, ip: string}|null */
+    private function getFloatingIp(string $id): ?array
+    {
+        try {
+            $resp = $this->http->request('GET', $this->base . '/floating-ips/' . rawurlencode($id));
+            if ($resp['status'] < 200 || $resp['status'] >= 300) {
+                return null;
+            }
+            $json = json_decode($resp['body'], true);
+            if (!is_array($json)) {
+                return null;
+            }
+            $row = $json['ip'] ?? $json['floating_ip'] ?? $json;
+            return is_array($row) ? $this->parseFloatingIpRow($row) : null;
+        } catch (\Throwable) {
+            return null;
+        }
     }
 
     /** @return list<array<string, mixed>> */
@@ -385,7 +460,8 @@ final class TimewebProvider implements ProviderInterface
         }
     }
 
-    private function createFloatingIp(string $zone): string
+    /** @return array{id: string, ip: string} */
+    private function createFloatingIp(string $zone): array
     {
         $resp = $this->http->request('POST', $this->base . '/floating-ips', [
             'availability_zone' => $zone,
@@ -405,13 +481,18 @@ final class TimewebProvider implements ProviderInterface
             throw new \RuntimeException('Timeweb floating IP: invalid JSON');
         }
         $fip = $json['ip'] ?? $json['floating_ip'] ?? $json;
-        if (is_array($fip)) {
-            $id = (string) ($fip['id'] ?? '');
-            if ($id !== '') {
-                return $id;
+        $parsed = is_array($fip) ? $this->parseFloatingIpRow($fip) : null;
+        if ($parsed !== null) {
+            return $parsed;
+        }
+        $id = is_array($fip) ? (string) ($fip['id'] ?? '') : '';
+        if ($id !== '') {
+            $got = $this->getFloatingIp($id);
+            if ($got !== null) {
+                return $got;
             }
         }
-        throw new \RuntimeException('Timeweb floating IP: missing id in response');
+        throw new \RuntimeException('Timeweb floating IP: missing ipv4 in response');
     }
 
     private function shouldOrderIpv4(string $status): bool
@@ -441,7 +522,8 @@ final class TimewebProvider implements ProviderInterface
             return;
         }
 
-        $fipId = $this->findFreeFloatingIpId($zone) ?? $this->createFloatingIp($zone);
+        $fip = $this->findFreeFloatingIp($zone) ?? $this->createFloatingIp($zone);
+        $fipId = $fip['id'];
         $bind = $this->http->request(
             'POST',
             $this->base . '/floating-ips/' . rawurlencode($fipId) . '/bind',
