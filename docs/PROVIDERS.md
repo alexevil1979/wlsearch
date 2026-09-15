@@ -13,7 +13,8 @@
 - **Но:** при `POST /servers` на балансе должно быть **≈ на 30 дней** этого тарифа, иначе **HTTP 402**. После создания платите только за фактические часы до destroy.
 - **`TIMEWEB_ENSURE_IPV4=1`** — публичный IPv4 (тоже почасовой). Сначала берётся свободный floating IP («Не подключен»), иначе новый. В `network.floating_ip` API ждёт **адрес** (`1.2.3.4`), не UUID.
 - `TIMEWEB_FLOATING_IP_ID` — UUID **или** сам IPv4 уже существующего адреса.
-- **`TIMEWEB_DELETE_FLOATING_IP_ON_DESTROY=1`** (по умолчанию) — при destroy удаляет floating IP. Для лотереи БС FAIL_BS адрес не нужен, переиспользовать бессмысленно. Упираетесь в лимит Timeweb ~10 create IP/сутки — ждите сброса. `0` — оставлять IP (не рекомендуется для BS-поиска).
+- **Аккаунты** (`/accounts`): несколько Timeweb/Selectel, галочки «в лотерее», round-robin на run. Токены и preset хранятся в аккаунте (migrate подтягивает из `.env`).
+- **`TIMEWEB_DELETE_FLOATING_IP_ON_DESTROY=1`** (в аккаунте) — при destroy удаляет floating IP. FAIL_BS адрес не переиспользуем. Лимит Timeweb ~10 create IP/сутки на аккаунт — заводите несколько аккаунтов.
 - Docs: https://timeweb.cloud/api-docs
 
 ## Selectel OpenStack

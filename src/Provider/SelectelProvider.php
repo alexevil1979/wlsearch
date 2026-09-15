@@ -4,35 +4,27 @@ declare(strict_types=1);
 
 namespace Wlsearch\Provider;
 
-use Wlsearch\Support\Env;
 use Wlsearch\Support\HttpClient;
 
 /**
  * Selectel OpenStack (Nova + Keystone + optional Neutron floating IP).
- *
- * Required env:
- *   SELECTEL_AUTH_URL, SELECTEL_USERNAME, SELECTEL_PASSWORD,
- *   SELECTEL_PROJECT_ID (or SELECTEL_PROJECT_NAME),
- *   SELECTEL_USER_DOMAIN_NAME, SELECTEL_PROJECT_DOMAIN_NAME,
- *   SELECTEL_FLAVOR_ID, SELECTEL_IMAGE_ID,
- *   SELECTEL_NETWORK_ID
- *
- * Optional floating IP:
- *   SELECTEL_EXTERNAL_NET_ID — if set, allocate+associate floating IP after create
+ * Credentials/config from AccountBag (multi-account) or legacy .env.
  */
 final class SelectelProvider implements ProviderInterface
 {
     private HttpClient $http;
+    private AccountBag $cfg;
     private ?string $token = null;
     private ?string $computeUrl = null;
     private ?string $networkUrl = null;
     private int $tokenExpires = 0;
 
-    public function __construct(?HttpClient $http = null)
+    public function __construct(?AccountBag $cfg = null, ?HttpClient $http = null)
     {
+        $this->cfg = $cfg ?? AccountBag::legacy('selectel');
         foreach (['SELECTEL_AUTH_URL', 'SELECTEL_USERNAME', 'SELECTEL_PASSWORD', 'SELECTEL_FLAVOR_ID', 'SELECTEL_IMAGE_ID', 'SELECTEL_NETWORK_ID'] as $k) {
-            if ((Env::get($k) ?? '') === '') {
-                throw new \RuntimeException("Missing {$k} for Selectel");
+            if (($this->cfg->get($k) ?? '') === '') {
+                throw new \RuntimeException("Missing {$k} for Selectel" . ($this->cfg->accountName !== '' ? ' (' . $this->cfg->accountName . ')' : ''));
             }
         }
         $this->http = $http ?? new HttpClient([
@@ -54,17 +46,17 @@ final class SelectelProvider implements ProviderInterface
         $body = [
             'server' => [
                 'name' => $opts['name'],
-                'flavorRef' => Env::require('SELECTEL_FLAVOR_ID'),
-                'imageRef' => Env::require('SELECTEL_IMAGE_ID'),
+                'flavorRef' => $this->cfg->require('SELECTEL_FLAVOR_ID'),
+                'imageRef' => $this->cfg->require('SELECTEL_IMAGE_ID'),
                 'networks' => [
-                    ['uuid' => Env::require('SELECTEL_NETWORK_ID')],
+                    ['uuid' => $this->cfg->require('SELECTEL_NETWORK_ID')],
                 ],
                 'user_data' => $userData,
                 'config_drive' => true,
             ],
         ];
 
-        $az = $opts['region'] ?? Env::get('SELECTEL_REGION');
+        $az = $opts['region'] ?? $this->cfg->get('SELECTEL_REGION');
         if ($az !== null && $az !== '') {
             $body['server']['availability_zone'] = $az;
         }
@@ -78,9 +70,8 @@ final class SelectelProvider implements ProviderInterface
         $id = (string) $server['id'];
         $meta = [];
 
-        $extNet = Env::get('SELECTEL_EXTERNAL_NET_ID', '');
-        if ($extNet) {
-            // Wait briefly for port, then allocate floating IP
+        $extNet = $this->cfg->get('SELECTEL_EXTERNAL_NET_ID', '') ?? '';
+        if ($extNet !== '') {
             sleep(3);
             $portId = $this->findServerPort($id);
             if ($portId) {
@@ -92,7 +83,6 @@ final class SelectelProvider implements ProviderInterface
 
         $info = $this->get($id);
         if ($meta !== []) {
-            // encode meta into raw for worker to persist
             $raw = $info->raw;
             $raw['_wlsearch_meta'] = $meta;
             return new ServerInfo($info->id, $meta['floating_ip'] ?? $info->ipv4, $info->status, $raw);
@@ -135,8 +125,6 @@ final class SelectelProvider implements ProviderInterface
     {
         $this->ensureAuth();
 
-        // Best-effort: delete floating IPs linked in provider_meta is handled by caller;
-        // also try to detach floating IPs found on server ports
         try {
             $portId = $this->findServerPort($serverId);
             if ($portId && $this->networkUrl) {
@@ -148,7 +136,6 @@ final class SelectelProvider implements ProviderInterface
                 }
             }
         } catch (\Throwable) {
-            // continue to delete server
         }
 
         $url = rtrim((string) $this->computeUrl, '/') . '/servers/' . rawurlencode($serverId);
@@ -214,21 +201,21 @@ final class SelectelProvider implements ProviderInterface
             return;
         }
 
-        $authUrl = rtrim(Env::require('SELECTEL_AUTH_URL'), '/');
+        $authUrl = rtrim($this->cfg->require('SELECTEL_AUTH_URL'), '/');
         if (!str_ends_with($authUrl, '/auth/tokens')) {
             $authUrl .= '/auth/tokens';
         }
 
-        $userDomain = Env::get('SELECTEL_USER_DOMAIN_NAME', 'Default') ?? 'Default';
-        $projectDomain = Env::get('SELECTEL_PROJECT_DOMAIN_NAME', 'Default') ?? 'Default';
-        $projectId = Env::get('SELECTEL_PROJECT_ID', '');
-        $projectName = Env::get('SELECTEL_PROJECT_NAME', '');
+        $userDomain = $this->cfg->get('SELECTEL_USER_DOMAIN_NAME', 'Default') ?? 'Default';
+        $projectDomain = $this->cfg->get('SELECTEL_PROJECT_DOMAIN_NAME', 'Default') ?? 'Default';
+        $projectId = $this->cfg->get('SELECTEL_PROJECT_ID', '') ?? '';
+        $projectName = $this->cfg->get('SELECTEL_PROJECT_NAME', '') ?? '';
 
-        $scope = $projectId
+        $scope = $projectId !== ''
             ? ['project' => ['id' => $projectId]]
             : ['project' => ['name' => $projectName, 'domain' => ['name' => $projectDomain]]];
 
-        if (!$projectId && !$projectName) {
+        if ($projectId === '' && $projectName === '') {
             throw new \RuntimeException('Set SELECTEL_PROJECT_ID or SELECTEL_PROJECT_NAME');
         }
 
@@ -238,9 +225,9 @@ final class SelectelProvider implements ProviderInterface
                     'methods' => ['password'],
                     'password' => [
                         'user' => [
-                            'name' => Env::require('SELECTEL_USERNAME'),
+                            'name' => $this->cfg->require('SELECTEL_USERNAME'),
                             'domain' => ['name' => $userDomain],
-                            'password' => Env::require('SELECTEL_PASSWORD'),
+                            'password' => $this->cfg->require('SELECTEL_PASSWORD'),
                         ],
                     ],
                 ],
@@ -267,7 +254,7 @@ final class SelectelProvider implements ProviderInterface
         $expires = $json['token']['expires_at'] ?? null;
         $this->tokenExpires = $expires ? (strtotime((string) $expires) ?: time() + 3600) : time() + 3600;
 
-        $region = Env::get('SELECTEL_REGION', '');
+        $region = $this->cfg->get('SELECTEL_REGION', '') ?? '';
         $this->computeUrl = null;
         $this->networkUrl = null;
 
@@ -279,9 +266,6 @@ final class SelectelProvider implements ProviderInterface
                     continue;
                 }
                 $epRegion = (string) ($ep['region'] ?? $ep['region_id'] ?? '');
-                if ($region !== '' && $epRegion !== '' && $epRegion !== $region && !str_starts_with($epRegion, $region)) {
-                    // allow region mismatch soft-match later
-                }
                 if ($type === 'compute' && ($this->computeUrl === null || ($region && str_contains($epRegion, $region)))) {
                     $this->computeUrl = rtrim((string) $ep['url'], '/');
                 }

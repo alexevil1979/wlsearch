@@ -128,16 +128,38 @@ final class Worker
     private function handleOrdering(array $run): void
     {
         $id = (int) $run['id'];
-        $provider = ProviderFactory::make((string) $run['provider']);
+        $accounts = new \Wlsearch\Provider\ProviderAccountService($this->pdo);
+        $accountId = isset($run['provider_account_id']) ? (int) $run['provider_account_id'] : 0;
+        if ($accountId <= 0) {
+            $picked = $accounts->pick((string) $run['provider']);
+            if ($picked !== null) {
+                $accountId = (int) $picked['id'];
+                $this->pdo->prepare('UPDATE runs SET provider_account_id = ?, updated_at = NOW() WHERE id = ?')
+                    ->execute([$accountId, $id]);
+                $run['provider_account_id'] = $accountId;
+            }
+        }
+
+        $provider = ProviderFactory::forRun($run);
         $name = sprintf('wlsearch-%d-%s', $id, date('His'));
         $cloudInit = CloudInitBuilder::forRun((string) $run['provider'], $id);
 
-        $info = $provider->create([
-            'name' => $name,
-            'region' => $run['region'],
-            'cloud_init' => $cloudInit,
-            'comment' => $run['comment'] ?? ('wlsearch run #' . $id),
-        ]);
+        try {
+            $info = $provider->create([
+                'name' => $name,
+                'region' => $run['region'],
+                'cloud_init' => $cloudInit,
+                'comment' => $run['comment'] ?? ('wlsearch run #' . $id),
+            ]);
+            if ($accountId > 0) {
+                $accounts->markUsed($accountId);
+            }
+        } catch (\Throwable $e) {
+            if ($accountId > 0) {
+                $accounts->markUsed($accountId, $e->getMessage());
+            }
+            throw $e;
+        }
 
         $meta = null;
         if (!empty($info->raw['_wlsearch_meta']) && is_array($info->raw['_wlsearch_meta'])) {
@@ -148,7 +170,7 @@ final class Worker
             'UPDATE runs SET provider_server_id = ?, ipv4 = ?, provider_meta = ?, state = ?, updated_at = NOW() WHERE id = ?'
         );
         $stmt->execute([$info->id, $info->ipv4, $meta, 'PROVISIONING', $id]);
-        fwrite(STDOUT, "run #{$id}: created server {$info->id} status={$info->status} ip=" . ($info->ipv4 ?: '-') . "\n");
+        fwrite(STDOUT, "run #{$id}: created server {$info->id} status={$info->status} ip=" . ($info->ipv4 ?: '-') . " acc=" . ($accountId ?: '-') . "\n");
         if ($info->isUnpaidOrBlocked()) {
             fwrite(STDOUT, "run #{$id}: WARNING create returned {$info->status} — see storage/logs/timeweb.log\n");
         }
@@ -164,7 +186,7 @@ final class Worker
             return;
         }
 
-        $provider = ProviderFactory::make((string) $run['provider']);
+        $provider = ProviderFactory::forRun($run);
         $info = $provider->get($serverId);
 
         if ($info->isUnpaidOrBlocked()) {
@@ -271,7 +293,7 @@ final class Worker
         $serverId = (string) ($run['provider_server_id'] ?? '');
         if ($serverId !== '') {
             try {
-                $info = ProviderFactory::make((string) $run['provider'])->get($serverId);
+                $info = ProviderFactory::forRun($run)->get($serverId);
                 if ($info->isUnpaidOrBlocked()) {
                     fwrite(STDOUT, "run #{$id}: bootstrap abort status={$info->status}\n");
                     $this->failRun(
@@ -471,7 +493,7 @@ final class Worker
             return;
         }
 
-        $provider = ProviderFactory::make((string) $run['provider']);
+        $provider = ProviderFactory::forRun($run);
         $provider->destroy($serverId);
 
         $stmt = $this->pdo->prepare(

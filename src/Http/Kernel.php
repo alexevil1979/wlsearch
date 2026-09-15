@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Wlsearch\Http;
 
 use Wlsearch\Auth\AuthService;
+use Wlsearch\Http\Controllers\AccountsController;
 use Wlsearch\Http\Controllers\AgentController;
 use Wlsearch\Http\Controllers\AuditController;
 use Wlsearch\Http\Controllers\AuthController;
@@ -41,6 +42,7 @@ final class Kernel
         $checkedIps = new CheckedIpsController();
         $devices = new DevicesController();
         $settings = new SettingsController();
+        $accounts = new AccountsController();
         $blacklist = new BlacklistController();
         $audit = new AuditController();
         $agent = new AgentController();
@@ -78,6 +80,12 @@ final class Kernel
         $router->get('/devices', [$devices, 'index']);
         $router->post('/devices', [$devices, 'create']);
         $router->post('/devices/{id}/revoke', [$devices, 'revoke']);
+
+        $router->get('/accounts', [$accounts, 'index']);
+        $router->post('/accounts', [$accounts, 'create']);
+        $router->post('/accounts/enabled', [$accounts, 'saveEnabled']);
+        $router->post('/accounts/{id}', [$accounts, 'update']);
+        $router->post('/accounts/{id}/delete', [$accounts, 'delete']);
 
         $router->get('/settings', [$settings, 'index']);
         $router->post('/settings', [$settings, 'save']);

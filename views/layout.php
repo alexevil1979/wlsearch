@@ -26,6 +26,7 @@ $nav = $nav ?? '';
         <a href="/inventory" class="<?= $nav === 'inventory' ? 'active' : '' ?>">Inventory</a>
         <a href="/checked-ips" class="<?= $nav === 'checked' ? 'active' : '' ?>">Checked</a>
         <a href="/devices" class="<?= $nav === 'devices' ? 'active' : '' ?>">Agents</a>
+        <a href="/accounts" class="<?= $nav === 'accounts' ? 'active' : '' ?>">Аккаунты</a>
         <a href="/settings" class="<?= $nav === 'settings' ? 'active' : '' ?>">Настройки</a>
         <a href="/logs" class="<?= $nav === 'logs' ? 'active' : '' ?>">Логи</a>
         <a href="/blacklist" class="<?= $nav === 'blacklist' ? 'active' : '' ?>">Blacklist</a>

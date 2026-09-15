@@ -8,15 +8,19 @@
 /** @var string|null $defaultBsMode */
 /** @var int $maxParallel */
 /** @var int $maxCreates */
+/** @var list<array<string,mixed>> $timewebAccounts */
+/** @var list<array<string,mixed>> $selectelAccounts */
 use Wlsearch\Support\View;
 $anyProvider = $timewebConfigured || $selectelConfigured;
 $bsDefault = $defaultBsMode ?: 'bsbord';
+$timewebAccounts = $timewebAccounts ?? [];
+$selectelAccounts = $selectelAccounts ?? [];
 ?>
 <h1>Запуск прогона</h1>
-<p class="muted">create → control → BS-проверка (по умолчанию bsbord.com).</p>
+<p class="muted">create → control → BS. Аккаунты: <a href="/accounts">/accounts</a>.</p>
 
 <?php if (!$anyProvider): ?>
-    <div class="flash flash-error">Ни один провайдер не настроен в .env.</div>
+    <div class="flash flash-error">Нет аккаунтов — добавьте в <a href="/accounts">Аккаунты</a> или .env.</div>
 <?php endif; ?>
 
 <div class="card">
@@ -24,12 +28,53 @@ $bsDefault = $defaultBsMode ?: 'bsbord';
         <?= $csrf ?>
 
         <label for="provider">Provider</label>
-        <select id="provider" name="provider" required>
+        <select id="provider" name="provider" required
+                onchange="(function(v){var tw=document.getElementById('acc-tw'),sel=document.getElementById('acc-sel');tw.style.display=v==='timeweb'?'block':'none';sel.style.display=v==='selectel'?'block':'none';tw.querySelectorAll('input[type=checkbox]').forEach(function(c){c.disabled=v!=='timeweb'||c.dataset.off==='1';});sel.querySelectorAll('input[type=checkbox]').forEach(function(c){c.disabled=v!=='selectel'||c.dataset.off==='1';});})(this.value)">
             <option value="timeweb" <?= $timewebConfigured ? '' : 'disabled' ?>>timeweb <?= $timewebConfigured ? '' : '(не настроен)' ?></option>
             <option value="selectel" <?= $selectelConfigured ? '' : 'disabled' ?>>selectel <?= $selectelConfigured ? '' : '(не настроен)' ?></option>
         </select>
 
-        <label for="region">Region / AZ</label>
+        <div id="acc-tw" style="margin:0.75rem 0">
+            <p style="margin:0 0 0.4rem;font-weight:600">Аккаунты Timeweb</p>
+            <p class="muted" style="margin:0 0 0.5rem">Галочки = участвуют в этом запуске. Пусто = все включённые в /accounts.</p>
+            <?php if ($timewebAccounts === []): ?>
+                <p class="muted">Нет аккаунтов — <a href="/accounts">добавить</a></p>
+            <?php else: ?>
+                <div style="display:flex;flex-wrap:wrap;gap:0.5rem 1rem">
+                    <?php foreach ($timewebAccounts as $a): ?>
+                        <label style="display:inline-flex;align-items:center;gap:0.35rem;cursor:pointer">
+                            <input type="checkbox" name="account_id[]" value="<?= (int) $a['id'] ?>"
+                                   <?= (int) $a['enabled'] ? 'checked' : '' ?>
+                                   <?= (int) $a['enabled'] ? '' : 'disabled' ?>
+                                   data-off="<?= (int) $a['enabled'] ? '0' : '1' ?>">
+                            #<?= (int) $a['id'] ?> <?= View::e((string) $a['name']) ?>
+                            <?php if (!(int) $a['enabled']): ?><span class="muted">(выкл)</span><?php endif; ?>
+                        </label>
+                    <?php endforeach; ?>
+                </div>
+            <?php endif; ?>
+        </div>
+
+        <div id="acc-sel" style="display:none;margin:0.75rem 0">
+            <p style="margin:0 0 0.4rem;font-weight:600">Аккаунты Selectel</p>
+            <?php if ($selectelAccounts === []): ?>
+                <p class="muted">Нет аккаунтов — <a href="/accounts">добавить</a></p>
+            <?php else: ?>
+                <div style="display:flex;flex-wrap:wrap;gap:0.5rem 1rem">
+                    <?php foreach ($selectelAccounts as $a): ?>
+                        <label style="display:inline-flex;align-items:center;gap:0.35rem;cursor:pointer">
+                            <input type="checkbox" name="account_id[]" value="<?= (int) $a['id'] ?>"
+                                   disabled
+                                   data-off="<?= (int) $a['enabled'] ? '0' : '1' ?>"
+                                   <?= (int) $a['enabled'] ? 'checked' : '' ?>>
+                            #<?= (int) $a['id'] ?> <?= View::e((string) $a['name']) ?>
+                        </label>
+                    <?php endforeach; ?>
+                </div>
+            <?php endif; ?>
+        </div>
+
+        <label for="region">Region / AZ (опц., иначе из аккаунта)</label>
         <input id="region" name="region" type="text"
                value="<?= View::e((string) ($timewebConfigured ? $defaultRegion : $defaultSelectelRegion)) ?>"
                placeholder="spb-3 или ru-9a">
@@ -44,11 +89,10 @@ $bsDefault = $defaultBsMode ?: 'bsbord';
                 both — bsbord или agent (PASS при любом)
             </option>
         </select>
-        <p class="muted">bsbord: мобильные каналы с dpi=on через https://bsbord.com/v1/probe</p>
 
         <label for="count">Count</label>
         <input id="count" name="count" type="number" min="1" max="20" value="1" required>
-        <p class="muted">Лимиты: parallel ≤ <?= (int) $maxParallel ?>, creates/day ≤ <?= (int) $maxCreates ?></p>
+        <p class="muted">Лимиты: parallel ≤ <?= (int) $maxParallel ?>, creates/day ≤ <?= (int) $maxCreates ?>. Count &gt; 1 раскидывается по отмеченным аккаунтам.</p>
 
         <label>
             <input type="checkbox" name="keep_on_fail" value="1">

@@ -30,6 +30,7 @@ $badgeClass = static function (string $state): string {
                 <th>State</th>
                 <th>BS</th>
                 <th>Provider</th>
+                <th>Аккаунт</th>
                 <th>IP</th>
                 <th>ASN</th>
                 <th>ctrl</th>
@@ -59,6 +60,13 @@ $badgeClass = static function (string $state): string {
                         <?php endif; ?>
                     </td>
                     <td><?= View::e((string) $r['provider']) ?><?php if ($r['region']): ?><br><span class="muted"><?= View::e((string) $r['region']) ?></span><?php endif; ?></td>
+                    <td class="muted">
+                        <?php if (!empty($r['account_name'])): ?>
+                            #<?= (int) ($r['provider_account_id'] ?? 0) ?> <?= View::e((string) $r['account_name']) ?>
+                        <?php elseif (!empty($r['provider_account_id'])): ?>
+                            #<?= (int) $r['provider_account_id'] ?>
+                        <?php else: ?>—<?php endif; ?>
+                    </td>
                     <td>
                         <?php if (!empty($r['ipv4'])): ?>
                             <code><?= View::e((string) $r['ipv4']) ?></code>

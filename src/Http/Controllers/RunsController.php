@@ -32,6 +32,7 @@ final class RunsController
     public function createForm(): void
     {
         $this->requireAuth();
+        $accSvc = new \Wlsearch\Provider\ProviderAccountService();
         View::render('runs/new', [
             'title' => 'Запуск прогона',
             'user' => AuthService::user(),
@@ -40,6 +41,8 @@ final class RunsController
             'nav' => 'runs',
             'timewebConfigured' => ProviderFactory::isConfigured('timeweb'),
             'selectelConfigured' => ProviderFactory::isConfigured('selectel'),
+            'timewebAccounts' => $accSvc->listAll('timeweb'),
+            'selectelAccounts' => $accSvc->listAll('selectel'),
             'defaultRegion' => Settings::get('TIMEWEB_AVAILABILITY_ZONE', Env::get('TIMEWEB_AVAILABILITY_ZONE', 'spb-3')),
             'defaultSelectelRegion' => Env::get('SELECTEL_REGION', 'ru-9a'),
             'maxParallel' => Settings::int('MAX_PARALLEL_VMS', 3),
@@ -66,6 +69,9 @@ final class RunsController
         $comment = trim((string) ($_POST['comment'] ?? ''));
         $defaultMode = Settings::get('BS_MODE_DEFAULT', Env::get('BS_MODE_DEFAULT', 'bsbord')) ?? 'bsbord';
         $bsMode = strtolower(trim((string) ($_POST['bs_mode'] ?? $defaultMode)));
+        $accountIds = isset($_POST['account_id']) && is_array($_POST['account_id'])
+            ? array_values(array_filter(array_map('intval', $_POST['account_id'])))
+            : [];
         $actor = (string) (AuthService::user()['login'] ?? 'admin');
 
         try {
@@ -77,6 +83,7 @@ final class RunsController
                 $comment !== '' ? $comment : null,
                 $actor,
                 $bsMode,
+                $accountIds !== [] ? $accountIds : null,
             );
             Flash::set('ok', 'Создано run: #' . implode(', #', $ids) . '. Worker подхватит в течение минуты.');
             header('Location: /runs');

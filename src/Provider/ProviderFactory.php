@@ -8,16 +8,35 @@ use Wlsearch\Support\Env;
 
 final class ProviderFactory
 {
-    public static function make(string $provider): ProviderInterface
+    public static function make(string $provider, ?int $accountId = null): ProviderInterface
     {
-        return match (strtolower($provider)) {
-            'timeweb' => new TimewebProvider(),
-            'selectel' => new SelectelProvider(),
+        $provider = strtolower($provider);
+        $bag = (new ProviderAccountService())->bag($accountId, $provider);
+        return match ($provider) {
+            'timeweb' => new TimewebProvider($bag),
+            'selectel' => new SelectelProvider($bag),
             default => throw new \InvalidArgumentException('Unknown provider: ' . $provider),
         };
     }
 
+    /** @param array<string, mixed> $run */
+    public static function forRun(array $run): ProviderInterface
+    {
+        $accountId = isset($run['provider_account_id']) && $run['provider_account_id'] !== null && $run['provider_account_id'] !== ''
+            ? (int) $run['provider_account_id']
+            : null;
+        if ($accountId !== null && $accountId <= 0) {
+            $accountId = null;
+        }
+        return self::make((string) $run['provider'], $accountId);
+    }
+
     public static function isConfigured(string $provider): bool
+    {
+        return (new ProviderAccountService())->isConfigured($provider);
+    }
+
+    public static function isConfiguredLegacy(string $provider): bool
     {
         return match (strtolower($provider)) {
             'timeweb' => (Env::get('TIMEWEB_API_TOKEN') ?? '') !== '',

@@ -55,35 +55,11 @@ $bsSelected = $bsSelected ?? [];
                value="<?= View::e((string) (($values['TELEGRAM_PROXY'] ?? '') !== '' ? $values['TELEGRAM_PROXY'] : 'socks5h://127.0.0.1:1080')) ?>"
                placeholder="socks5h://127.0.0.1:1080">
 
-        <h2 style="margin-top:1.4rem">Timeweb VPS</h2>
+        <h2 style="margin-top:1.4rem">Timeweb / Selectel VPS</h2>
         <p class="muted" style="margin:0 0 0.75rem">
-            Основной режим: <strong>preset</strong> (<code>TIMEWEB_PRESET_ID</code> + <code>OS_ID</code> + zone).
-            Биллинг Cloud всегда почасовой. Токен только в <code>.env</code>.
-            Configurator — запасной вариант, если Preset id пустой.
+            Токены, preset, zone и прочее — в <a href="/accounts"><strong>Аккаунты</strong></a>
+            (несколько аккаунтов + галочки). Здесь больше не дублируем.
         </p>
-        <?php
-        $twLabels = [
-            'TIMEWEB_PRESET_ID' => 'Preset id (обязательно для create)',
-            'TIMEWEB_OS_ID' => 'OS id',
-            'TIMEWEB_AVAILABILITY_ZONE' => 'Zone (availability_zone)',
-            'TIMEWEB_BANDWIDTH' => 'Bandwidth (Мбит/с)',
-            'TIMEWEB_PROJECT_ID' => 'Project id (опц.)',
-            'TIMEWEB_PRESET_COST_RUB' => 'Оценка стоимости ₽ (лимиты)',
-            'TIMEWEB_ENSURE_IPV4' => 'Заказывать IPv4 (1/0)',
-            'TIMEWEB_FLOATING_IP_ID' => 'Pinned floating IP id/адрес',
-            'TIMEWEB_DELETE_FLOATING_IP_ON_DESTROY' => 'Удалять IP при destroy (1 — не переиспользовать FAIL_BS)',
-            'TIMEWEB_CONFIGURATOR_ID' => 'Configurator id (если preset пуст)',
-            'TIMEWEB_CPU' => 'CPU (только configurator)',
-            'TIMEWEB_GPU' => 'GPU (только configurator)',
-            'TIMEWEB_RAM_GB' => 'RAM ГБ (только configurator)',
-            'TIMEWEB_DISK_GB' => 'Диск ГБ (только configurator)',
-        ];
-        foreach ($twLabels as $key => $label):
-        ?>
-            <label for="<?= View::e($key) ?>"><?= View::e($label) ?></label>
-            <input id="<?= View::e($key) ?>" name="<?= View::e($key) ?>" type="text"
-                   value="<?= View::e((string) ($values[$key] ?? '')) ?>">
-        <?php endforeach; ?>
 
         <h2 style="margin-top:1.4rem">bsbord API</h2>
         <label for="BSBORD_API_TOKEN">Токен (bsk_live_…)</label>

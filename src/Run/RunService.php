@@ -34,6 +34,7 @@ final class RunService
     }
 
     /**
+     * @param list<int>|null $accountIds selected accounts; null/empty = all enabled
      * @return list<int> created run ids
      */
     public function createRuns(
@@ -44,13 +45,14 @@ final class RunService
         ?string $comment,
         string $actor,
         string $bsMode = 'agent',
+        ?array $accountIds = null,
     ): array {
         $provider = strtolower($provider);
         if (!in_array($provider, ['timeweb', 'selectel'], true)) {
             throw new \InvalidArgumentException('provider must be timeweb|selectel');
         }
         if (!ProviderFactory::isConfigured($provider)) {
-            throw new \RuntimeException('Провайдер не настроен (проверьте .env)');
+            throw new \RuntimeException('Провайдер не настроен — добавьте аккаунт в /accounts (или .env)');
         }
 
         $bsMode = strtolower($bsMode);
@@ -64,18 +66,34 @@ final class RunService
             }
         }
 
+        $accounts = new \Wlsearch\Provider\ProviderAccountService($this->pdo);
+        $pool = $accounts->listEnabled($provider);
+        if ($accountIds !== null && $accountIds !== []) {
+            $allow = array_fill_keys(array_map('intval', $accountIds), true);
+            $pool = array_values(array_filter($pool, static fn (array $r): bool => isset($allow[(int) $r['id']])));
+        }
+        if ($pool === [] && !ProviderFactory::isConfiguredLegacy($provider)) {
+            throw new \RuntimeException('Нет включённых аккаунтов для ' . $provider . ' — отметьте галочки в /accounts');
+        }
+
         $count = max(1, min(20, $count));
         $this->assertCanCreate($count, $provider);
 
         $ids = [];
         $stmt = $this->pdo->prepare(
-            'INSERT INTO runs (provider, region, state, keep_on_fail, bs_mode, comment, created_by, created_at, updated_at)
-             VALUES (?, ?, \'ORDERING\', ?, ?, ?, ?, NOW(), NOW())'
+            'INSERT INTO runs (provider, provider_account_id, region, state, keep_on_fail, bs_mode, comment, created_by, created_at, updated_at)
+             VALUES (?, ?, ?, \'ORDERING\', ?, ?, ?, ?, NOW(), NOW())'
         );
 
         for ($i = 0; $i < $count; $i++) {
+            $accountId = null;
+            if ($pool !== []) {
+                $picked = $pool[$i % count($pool)];
+                $accountId = (int) $picked['id'];
+            }
             $stmt->execute([
                 $provider,
+                $accountId,
                 $region !== null && $region !== '' ? $region : null,
                 $keepOnFail ? 1 : 0,
                 $bsMode,
@@ -84,8 +102,12 @@ final class RunService
             ]);
             $id = (int) $this->pdo->lastInsertId();
             $ids[] = $id;
+            if ($accountId !== null) {
+                $accounts->markUsed($accountId);
+            }
             Audit::log($actor, 'run.create', 'run', (string) $id, [
                 'provider' => $provider,
+                'provider_account_id' => $accountId,
                 'region' => $region,
                 'keep_on_fail' => $keepOnFail,
                 'bs_mode' => $bsMode,
@@ -327,7 +349,10 @@ final class RunService
     {
         $limit = max(1, min(500, $limit));
         $stmt = $this->pdo->query(
-            "SELECT * FROM runs ORDER BY id DESC LIMIT {$limit}"
+            "SELECT r.*, a.name AS account_name
+             FROM runs r
+             LEFT JOIN provider_accounts a ON a.id = r.provider_account_id
+             ORDER BY r.id DESC LIMIT {$limit}"
         );
         return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
     }

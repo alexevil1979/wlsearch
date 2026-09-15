@@ -103,38 +103,28 @@ TXT;
 
     private function timewebFinances(): int
     {
-        $p = new \Wlsearch\Provider\TimewebProvider();
-        $f = $p->fetchFinances();
-        \Wlsearch\Support\FileLog::write('timeweb', 'finances:cli', $f);
-        fwrite(STDOUT, json_encode($f, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) . "\n");
-
-        $balance = (float) ($f['balance'] ?? 0);
-        $monthly = (float) ($f['monthly_fee'] ?? 0);
-        $vpsEst = (float) \Wlsearch\Support\Settings::int('TIMEWEB_PRESET_COST_RUB', \Wlsearch\Support\Env::int('TIMEWEB_PRESET_COST_RUB', 700));
-        if ($vpsEst <= 0) {
-            $vpsEst = 700.0;
+        $svc = new \Wlsearch\Provider\ProviderAccountService();
+        $rows = $svc->listAll('timeweb');
+        if ($rows === []) {
+            $rows = [['id' => null, 'name' => 'legacy .env']];
         }
-        $ipEst = \Wlsearch\Support\Settings::bool('TIMEWEB_ENSURE_IPV4', true) ? 180.0 : 0.0;
-        $need = $monthly + $vpsEst + $ipEst;
-        fwrite(STDOUT, sprintf(
-            "estimate create reserve: need≈%.0f ₽ (burn=%.0f + VPS≈%.0f + IP≈%.0f), balance=%.2f → %s\n",
-            $need,
-            $monthly,
-            $vpsEst,
-            $ipEst,
-            $balance,
-            $balance >= $need ? 'OK' : 'RISK no_paid'
-        ));
-
+        foreach ($rows as $row) {
+            $id = isset($row['id']) ? (int) $row['id'] : 0;
+            fwrite(STDOUT, "=== account #" . ($id ?: '-') . ' ' . ($row['name'] ?? '') . " ===\n");
+            try {
+                $p = $id > 0
+                    ? \Wlsearch\Provider\ProviderFactory::make('timeweb', $id)
+                    : new \Wlsearch\Provider\TimewebProvider();
+                /** @var \Wlsearch\Provider\TimewebProvider $p */
+                $f = $p->fetchFinances();
+                \Wlsearch\Support\FileLog::write('timeweb', 'finances:cli', ['account' => $id ?: 'legacy', 'finances' => $f]);
+                fwrite(STDOUT, json_encode($f, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) . "\n");
+            } catch (\Throwable $e) {
+                fwrite(STDOUT, 'ERROR: ' . $e->getMessage() . "\n");
+            }
+        }
         $log = dirname(__DIR__, 2) . '/storage/logs/timeweb.log';
         fwrite(STDOUT, "create log: {$log}\n");
-        if (is_file($log)) {
-            $lines = @file($log, FILE_IGNORE_NEW_LINES) ?: [];
-            $tail = array_slice($lines, -20);
-            fwrite(STDOUT, "--- timeweb.log (tail) ---\n" . implode("\n", $tail) . "\n");
-        } else {
-            fwrite(STDOUT, "(лог пуст — появится после create; сейчас записан finances:cli)\n");
-        }
         return 0;
     }
 

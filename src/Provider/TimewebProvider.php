@@ -4,23 +4,23 @@ declare(strict_types=1);
 
 namespace Wlsearch\Provider;
 
-use Wlsearch\Support\Env;
 use Wlsearch\Support\FileLog;
 use Wlsearch\Support\HttpClient;
-use Wlsearch\Support\Settings;
 
 final class TimewebProvider implements ProviderInterface
 {
     private HttpClient $http;
     private string $base;
+    private AccountBag $cfg;
 
-    public function __construct(?HttpClient $http = null)
+    public function __construct(?AccountBag $cfg = null, ?HttpClient $http = null)
     {
-        $token = Env::get('TIMEWEB_API_TOKEN', '');
+        $this->cfg = $cfg ?? AccountBag::legacy('timeweb');
+        $token = $this->cfg->get('TIMEWEB_API_TOKEN', '');
         if ($token === null || $token === '') {
-            throw new \RuntimeException('TIMEWEB_API_TOKEN is not configured');
+            throw new \RuntimeException('TIMEWEB_API_TOKEN is not configured' . ($this->cfg->accountName !== '' ? ' (' . $this->cfg->accountName . ')' : ''));
         }
-        $this->base = rtrim(Env::get('TIMEWEB_API_BASE', 'https://api.timeweb.cloud/api/v1') ?? '', '/');
+        $this->base = rtrim($this->cfg->get('TIMEWEB_API_BASE', 'https://api.timeweb.cloud/api/v1') ?? '', '/');
         $this->http = $http ?? new HttpClient([
             'Authorization: Bearer ' . $token,
             'Content-Type: application/json',
@@ -35,13 +35,15 @@ final class TimewebProvider implements ProviderInterface
 
     public function create(array $opts): ServerInfo
     {
-        $osId = Settings::int('TIMEWEB_OS_ID', Env::int('TIMEWEB_OS_ID', 99));
+        $osId = $this->cfg->int('TIMEWEB_OS_ID', 99);
         if ($osId <= 0) {
-            throw new \RuntimeException('TIMEWEB_OS_ID must be set (Настройки / .env)');
+            throw new \RuntimeException('TIMEWEB_OS_ID must be set (аккаунт / Настройки)');
         }
 
         $financesBefore = $this->fetchFinances();
         FileLog::write('timeweb', 'create:start', [
+            'account' => $this->cfg->logTag(),
+            'account_name' => $this->cfg->accountName,
             'finances' => $financesBefore,
             'opts_name' => $opts['name'] ?? null,
         ]);
@@ -51,28 +53,28 @@ final class TimewebProvider implements ProviderInterface
             'os_id' => $osId,
             'is_ddos_guard' => false,
             'is_local_network' => false,
-            'bandwidth' => Settings::int('TIMEWEB_BANDWIDTH', Env::int('TIMEWEB_BANDWIDTH', 200)),
+            'bandwidth' => $this->cfg->int('TIMEWEB_BANDWIDTH', 200),
             'cloud_init' => $opts['cloud_init'],
         ];
 
-        $presetId = Settings::int('TIMEWEB_PRESET_ID', Env::int('TIMEWEB_PRESET_ID', 0));
-        $configuratorId = Settings::int('TIMEWEB_CONFIGURATOR_ID', Env::int('TIMEWEB_CONFIGURATOR_ID', 0));
+        $presetId = $this->cfg->int('TIMEWEB_PRESET_ID', 0);
+        $configuratorId = $this->cfg->int('TIMEWEB_CONFIGURATOR_ID', 0);
 
         if ($presetId > 0) {
             $body['preset_id'] = $presetId;
         } elseif ($configuratorId > 0) {
-            $ramGb = max(1, Settings::int('TIMEWEB_RAM_GB', Env::int('TIMEWEB_RAM_GB', 1)));
-            $diskGb = max(1, Settings::int('TIMEWEB_DISK_GB', Env::int('TIMEWEB_DISK_GB', 15)));
+            $ramGb = max(1, $this->cfg->int('TIMEWEB_RAM_GB', 1));
+            $diskGb = max(1, $this->cfg->int('TIMEWEB_DISK_GB', 15));
             $body['configuration'] = [
                 'configurator_id' => $configuratorId,
-                'cpu' => max(1, Settings::int('TIMEWEB_CPU', Env::int('TIMEWEB_CPU', 1))),
-                'gpu' => max(0, Settings::int('TIMEWEB_GPU', Env::int('TIMEWEB_GPU', 0))),
+                'cpu' => max(1, $this->cfg->int('TIMEWEB_CPU', 1)),
+                'gpu' => max(0, $this->cfg->int('TIMEWEB_GPU', 0)),
                 'ram' => $ramGb * 1024,
                 'disk' => $diskGb * 1024,
             ];
         } else {
             throw new \RuntimeException(
-                'Задайте TIMEWEB_PRESET_ID в Настройках (или TIMEWEB_CONFIGURATOR_ID как запасной вариант)'
+                'Задайте TIMEWEB_PRESET_ID в аккаунте (или TIMEWEB_CONFIGURATOR_ID)'
             );
         }
 
@@ -81,12 +83,12 @@ final class TimewebProvider implements ProviderInterface
         }
 
         $zone = $opts['region']
-            ?? Settings::get('TIMEWEB_AVAILABILITY_ZONE', Env::get('TIMEWEB_AVAILABILITY_ZONE', 'spb-3'));
+            ?? $this->cfg->get('TIMEWEB_AVAILABILITY_ZONE', 'spb-3');
         if ($zone !== null && $zone !== '') {
             $body['availability_zone'] = $zone;
         }
 
-        $projectId = Settings::int('TIMEWEB_PROJECT_ID', Env::int('TIMEWEB_PROJECT_ID', 0));
+        $projectId = $this->cfg->int('TIMEWEB_PROJECT_ID', 0);
         if ($projectId > 0) {
             $body['project_id'] = $projectId;
         }
@@ -257,10 +259,10 @@ final class TimewebProvider implements ProviderInterface
     {
         // Default ON: drop floating IP with VPS after FAIL_BS — reuse бесполезен для лотереи БС.
         // TIMEWEB_DELETE_FLOATING_IP_ON_DESTROY=0 только если сознательно копите пул IP (упираетесь в daily limit).
-        if (!Settings::bool('TIMEWEB_DELETE_FLOATING_IP_ON_DESTROY', Env::bool('TIMEWEB_DELETE_FLOATING_IP_ON_DESTROY', true))) {
+        if (!$this->cfg->bool('TIMEWEB_DELETE_FLOATING_IP_ON_DESTROY', true)) {
             return;
         }
-        $pinned = trim(Settings::get('TIMEWEB_FLOATING_IP_ID', Env::get('TIMEWEB_FLOATING_IP_ID', '') ?? '') ?? '');
+        $pinned = trim($this->cfg->get('TIMEWEB_FLOATING_IP_ID', '') ?? '');
         foreach ($ids as $id) {
             if ($pinned !== '' && $id === $pinned) {
                 continue; // never delete explicitly pinned IP
@@ -378,7 +380,7 @@ final class TimewebProvider implements ProviderInterface
 
     private function ensureIpv4(): bool
     {
-        return Settings::bool('TIMEWEB_ENSURE_IPV4', Env::bool('TIMEWEB_ENSURE_IPV4', true));
+        return $this->cfg->bool('TIMEWEB_ENSURE_IPV4', true);
     }
 
     /**
@@ -417,7 +419,7 @@ final class TimewebProvider implements ProviderInterface
             return null;
         }
         // Rough new service cost (admin estimate or defaults)
-        $vpsEst = (float) Settings::int('TIMEWEB_PRESET_COST_RUB', Env::int('TIMEWEB_PRESET_COST_RUB', 0));
+        $vpsEst = (float) $this->cfg->int('TIMEWEB_PRESET_COST_RUB', 0);
         if ($vpsEst <= 0) {
             $vpsEst = 700.0; // typical cheap cloud VPS/month ballpark
         }
@@ -452,7 +454,7 @@ final class TimewebProvider implements ProviderInterface
         if ($zone !== '') {
             return $zone;
         }
-        return Settings::get('TIMEWEB_AVAILABILITY_ZONE', Env::get('TIMEWEB_AVAILABILITY_ZONE', 'spb-3') ?? 'spb-3') ?? 'spb-3';
+        return $this->cfg->get('TIMEWEB_AVAILABILITY_ZONE', 'spb-3') ?? 'spb-3';
     }
 
     /**
@@ -460,7 +462,7 @@ final class TimewebProvider implements ProviderInterface
      */
     private function resolveFloatingIp(string $zone): ?array
     {
-        $pinned = trim(Settings::get('TIMEWEB_FLOATING_IP_ID', Env::get('TIMEWEB_FLOATING_IP_ID', '') ?? '') ?? '');
+        $pinned = trim($this->cfg->get('TIMEWEB_FLOATING_IP_ID', '') ?? '');
         if ($pinned !== '') {
             $fromPin = $this->floatingIpByPin($pinned, $zone);
             if ($fromPin !== null) {
