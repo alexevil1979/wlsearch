@@ -438,10 +438,13 @@ sudo ufw enable
 
 ```bash
 cd /ssd/www/wlsearch
-sudo -u www-data git pull origin main
+sudo git pull origin main
+sudo chmod +x bin/wlsearch-run
 sudo -u www-data ./bin/wlsearch-run migrate
 sudo systemctl reload php8.2-fpm
 ```
+
+`sudo -u www-data git pull` часто даёт `Permission denied` на `.git/FETCH_HEAD` — тяните от root.
 
 `.env` не перезаписывается pull’ом (в `.gitignore`).
 

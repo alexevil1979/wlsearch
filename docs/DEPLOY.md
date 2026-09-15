@@ -23,10 +23,15 @@
 
 ```bash
 cd /ssd/www/wlsearch
-sudo -u www-data git pull origin main
-sudo -u www-data php8.2 bin/wlsearch migrate
-sudo systemctl reload php8.2-fpm
+sudo git pull origin main
+sudo chmod +x bin/wlsearch-run
+sudo -u www-data ./bin/wlsearch-run migrate
+sudo systemctl reload php8.2-fpm 2>/dev/null || sudo systemctl reload php-fpm82 2>/dev/null || true
 ```
+
+Не вызывайте `php8.2 bin/wlsearch` напрямую на servv — сработает host-wide `open_basedir` без wlsearch. Только `./bin/wlsearch-run …`.
+
+`git pull` лучше от **root** (или владельца `.git`). `sudo -u www-data git pull` падает с `Permission denied` на `.git/FETCH_HEAD`, если репозиторий когда-то тянули от root.
 
 ## Vhost
 
