@@ -435,7 +435,7 @@ sudo systemctl reload php8.2-fpm
 
 | Симптом | Что проверить |
 |---------|----------------|
-| `open_basedir restriction` / `bootstrap.php` Operation not permitted | Каталог `/ssd/www/wlsearch` не в `open_basedir`. CLI: `./bin/wlsearch-run …` или `php8.2 -d open_basedir= bin/wlsearch …`. Постоянно — добавить путь в php.ini / FPM pool (ниже). |
+| `There is no active transaction` на migrate | Исправлено в коде (DDL MySQL). `git pull` и снова `./bin/wlsearch-run migrate` |
 | `db=down` в `/health` | MySQL up, `DB_*`, grants, `127.0.0.1` vs `localhost` (socket) |
 | 404 Apache | DocumentRoot = `.../public`, site enabled, DNS |
 | Белый экран PHP | `storage/logs`, `php8.2-fpm` status, `error.log` Apache |

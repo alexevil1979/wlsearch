@@ -7,6 +7,10 @@ namespace Wlsearch\Database;
 use PDO;
 use Wlsearch\Support\Database;
 
+/**
+ * MySQL 5.7: DDL (CREATE/ALTER) implicitly commits, so wrapping migrations
+ * in PDO transactions causes "There is no active transaction" on commit/rollBack.
+ */
 final class Migrator
 {
     private string $migrationsPath;
@@ -38,22 +42,27 @@ final class Migrator
                 throw new \RuntimeException("Invalid migration: {$file}");
             }
 
-            $pdo->beginTransaction();
             try {
                 $migration['up']($pdo);
-                $stmt = $pdo->prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (?, NOW())');
+                $stmt = $pdo->prepare(
+                    'INSERT INTO schema_migrations (version, applied_at) VALUES (?, NOW())'
+                );
                 $stmt->execute([$version]);
-                $pdo->commit();
                 fwrite(STDOUT, "Migrated: {$version}\n");
                 $count++;
             } catch (\Throwable $e) {
-                $pdo->rollBack();
-                throw $e;
+                throw new \RuntimeException(
+                    "Migration {$version} failed: " . $e->getMessage(),
+                    0,
+                    $e
+                );
             }
         }
 
         if ($count === 0) {
             fwrite(STDOUT, "Nothing to migrate.\n");
+        } else {
+            fwrite(STDOUT, "Done. Applied {$count} migration(s).\n");
         }
 
         return 0;
