@@ -105,13 +105,35 @@ TXT;
     {
         $p = new \Wlsearch\Provider\TimewebProvider();
         $f = $p->fetchFinances();
+        \Wlsearch\Support\FileLog::write('timeweb', 'finances:cli', $f);
         fwrite(STDOUT, json_encode($f, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) . "\n");
+
+        $balance = (float) ($f['balance'] ?? 0);
+        $monthly = (float) ($f['monthly_fee'] ?? 0);
+        $vpsEst = (float) \Wlsearch\Support\Settings::int('TIMEWEB_PRESET_COST_RUB', \Wlsearch\Support\Env::int('TIMEWEB_PRESET_COST_RUB', 700));
+        if ($vpsEst <= 0) {
+            $vpsEst = 700.0;
+        }
+        $ipEst = \Wlsearch\Support\Settings::bool('TIMEWEB_ENSURE_IPV4', true) ? 180.0 : 0.0;
+        $need = $monthly + $vpsEst + $ipEst;
+        fwrite(STDOUT, sprintf(
+            "estimate create reserve: need≈%.0f ₽ (burn=%.0f + VPS≈%.0f + IP≈%.0f), balance=%.2f → %s\n",
+            $need,
+            $monthly,
+            $vpsEst,
+            $ipEst,
+            $balance,
+            $balance >= $need ? 'OK' : 'RISK no_paid'
+        ));
+
         $log = dirname(__DIR__, 2) . '/storage/logs/timeweb.log';
         fwrite(STDOUT, "create log: {$log}\n");
         if (is_file($log)) {
             $lines = @file($log, FILE_IGNORE_NEW_LINES) ?: [];
-            $tail = array_slice($lines, -15);
+            $tail = array_slice($lines, -20);
             fwrite(STDOUT, "--- timeweb.log (tail) ---\n" . implode("\n", $tail) . "\n");
+        } else {
+            fwrite(STDOUT, "(лог пуст — появится после create; сейчас записан finances:cli)\n");
         }
         return 0;
     }
