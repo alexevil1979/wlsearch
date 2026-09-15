@@ -42,7 +42,9 @@ $bsSelected = $bsSelected ?? [];
         <p class="muted" style="margin:0 0 0.75rem">
             Создание через <code>configuration</code> (не preset): zone / os / configurator / cpu / ram / disk.
             Токен API остаётся в <code>.env</code> (<code>TIMEWEB_API_TOKEN</code>).
-            Если заполнен <code>PRESET_ID</code> — используется preset вместо configurator.
+            Биллинг Timeweb Cloud <strong>всегда почасовой</strong> — в API нет переключателя «месяц/час».
+            Метка «Не оплачен» = на балансе мало запаса ≈ на 30 дней этого тарифа (configurator обычно дороже preset).
+            Если заполнен Preset id и включён force preset — используется preset.
         </p>
         <?php
         $twLabels = [
