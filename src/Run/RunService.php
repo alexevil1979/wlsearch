@@ -410,6 +410,13 @@ final class RunService
             . ($note !== null && $note !== '' ? " — {$note}" : '')
             . "\nочередь остановлена: skipped={$stop['skipped']} kept={$stop['kept']} (VPS сохранён)"
         );
+
+        (new \Wlsearch\ProtectedIp\ProtectedIpService($this->pdo))->protect(
+            $ipv4,
+            'favorite_subnet',
+            $runId,
+            $hitMsg
+        );
     }
 
     public function requestDestroy(int $runId, string $actor): void
@@ -421,9 +428,25 @@ final class RunService
         if (in_array($run['state'], ['DESTROYED', 'DESTROYING'], true)) {
             return;
         }
+
+        $ipv4 = (string) ($run['ipv4'] ?? '');
+        if ($ipv4 !== '') {
+            // На всякий случай: IP с KEEP/избранной — в protected, destroy VM его не снимет
+            if ($run['state'] === 'KEEP'
+                || str_starts_with((string) ($run['error_message'] ?? ''), 'избранная подсеть')
+            ) {
+                (new \Wlsearch\ProtectedIp\ProtectedIpService($this->pdo))->protect(
+                    $ipv4,
+                    'keep_before_destroy',
+                    $runId,
+                    'protect before destroy button'
+                );
+            }
+        }
+
         $this->updateState($runId, 'DESTROYING', null, null);
         Audit::log($actor, 'run.destroy_request', 'run', (string) $runId);
-        $this->tg->send("wlsearch: destroy requested run #{$runId} ip=" . ($run['ipv4'] ?? '-'));
+        $this->tg->send("wlsearch: destroy requested run #{$runId} ip=" . ($ipv4 !== '' ? $ipv4 : '-'));
     }
 
     public function requestKeep(int $runId, string $actor): void
@@ -448,6 +471,15 @@ final class RunService
              WHERE id = ?"
         );
         $stmt->execute([mb_substr($msg, 0, 500), $runId]);
+
+        if ($ipv4 !== '') {
+            (new \Wlsearch\ProtectedIp\ProtectedIpService($this->pdo))->protect(
+                $ipv4,
+                'keep',
+                $runId,
+                $msg
+            );
+        }
 
         Audit::log($actor, 'run.keep', 'run', (string) $runId, ['ipv4' => $ipv4]);
         $this->tg->send("wlsearch: KEEP run #{$runId} ip=" . ($ipv4 !== '' ? $ipv4 : '-'));

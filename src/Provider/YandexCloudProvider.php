@@ -171,10 +171,21 @@ final class YandexCloudProvider implements ProviderInterface
 
     public function destroy(string $serverId): void
     {
+        // ВАЖНО: удаляем только Compute Instance.
+        // VPC Address (статический публичный IP) НИКОГДА не удаляем через API —
+        // иначе сорвётся резерв после «избранная подсеть» / ручного KEEP.
         FileLog::write('yandex', 'destroy:start', [
             'instance_id' => $serverId,
             'account' => $this->cfg->logTag(),
         ]);
+        try {
+            $this->detachProtectedNatBeforeDestroy($serverId);
+        } catch (\Throwable $e) {
+            FileLog::write('yandex', 'destroy:detach_protected_warn', [
+                'instance_id' => $serverId,
+                'error' => $e->getMessage(),
+            ]);
+        }
         try {
             $op = $this->api(
                 'DELETE',
@@ -188,6 +199,58 @@ final class YandexCloudProvider implements ProviderInterface
             throw $e;
         }
         FileLog::write('yandex', 'destroy:done', ['instance_id' => $serverId]);
+    }
+
+    /**
+     * Если на VM ещё висит защищённый (зарезервированный) публичный IP —
+     * сначала отвязать one-to-one NAT, не удаляя Address в VPC.
+     */
+    private function detachProtectedNatBeforeDestroy(string $serverId): void
+    {
+        $inst = $this->api(
+            'GET',
+            'https://compute.api.cloud.yandex.net/compute/v1/instances/' . rawurlencode($serverId)
+        );
+        $publicIp = $this->extractPublicIpv4($inst);
+        if ($publicIp === null || $publicIp === '') {
+            return;
+        }
+        $protected = new \Wlsearch\ProtectedIp\ProtectedIpService();
+        if (!$protected->isProtected($publicIp)) {
+            return;
+        }
+
+        $nicIndex = '0';
+        $internal = null;
+        foreach ($inst['networkInterfaces'] ?? [] as $i => $nic) {
+            if (!is_array($nic)) {
+                continue;
+            }
+            $nat = $nic['primaryV4Address']['oneToOneNat']['address'] ?? null;
+            if (is_string($nat) && $nat === $publicIp) {
+                $nicIndex = (string) ($nic['index'] ?? $i);
+                $internal = $nic['primaryV4Address']['address'] ?? null;
+                break;
+            }
+        }
+
+        $body = ['networkInterfaceIndex' => $nicIndex];
+        if (is_string($internal) && $internal !== '') {
+            $body['internalAddress'] = $internal;
+        }
+
+        FileLog::write('yandex', 'destroy:detach_protected_nat', [
+            'instance_id' => $serverId,
+            'public_ip' => $publicIp,
+            'nic' => $nicIndex,
+        ]);
+        $op = $this->api(
+            'POST',
+            'https://compute.api.cloud.yandex.net/compute/v1/instances/'
+            . rawurlencode($serverId) . ':removeOneToOneNat',
+            $body
+        );
+        $this->waitOperation($op);
     }
 
     /** Restart VM (probe hang recovery). */
