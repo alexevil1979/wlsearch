@@ -101,7 +101,12 @@ final class TimewebProvider implements ProviderInterface
 
         $logBody = $body;
         unset($logBody['cloud_init']); // huge
-        FileLog::write('timeweb', 'create:request', $logBody);
+        $ci = (string) ($opts['cloud_init'] ?? '');
+        FileLog::write('timeweb', 'create:request', $logBody + [
+            'cloud_init_bytes' => strlen($ci),
+            'cloud_init_sha1' => $ci !== '' ? sha1($ci) : null,
+            'cloud_init_head' => $ci !== '' ? mb_substr($ci, 0, 60) : null,
+        ]);
 
         $shortage = $this->explainBalanceRisk($financesBefore, $attachIpv4After);
         if ($shortage !== null) {
@@ -896,6 +901,46 @@ final class TimewebProvider implements ProviderInterface
             return $out;
         } catch (\Throwable) {
             return [];
+        }
+    }
+
+    /**
+     * Перезалить user-data и reboot (если create-time cloud-init не поднял probe).
+     * Timeweb: после смены cloud_init обычно нужен clean; reboot — best-effort.
+     */
+    public function repushCloudInitAndReboot(string $serverId, string $cloudInit): void
+    {
+        FileLog::write('timeweb', 'cloud_init:repush', [
+            'server_id' => $serverId,
+            'bytes' => strlen($cloudInit),
+            'head' => mb_substr($cloudInit, 0, 40),
+        ]);
+        $patch = $this->http->request(
+            'PATCH',
+            $this->base . '/servers/' . rawurlencode($serverId),
+            ['cloud_init' => $cloudInit]
+        );
+        FileLog::write('timeweb', 'cloud_init:repush_patch', [
+            'http' => $patch['status'],
+            'body' => mb_substr($patch['body'], 0, 800),
+        ]);
+        if ($patch['status'] < 200 || $patch['status'] >= 300) {
+            throw new \RuntimeException(
+                'Timeweb PATCH cloud_init HTTP ' . $patch['status'] . ': ' . mb_substr($patch['body'], 0, 400)
+            );
+        }
+        $reboot = $this->http->request(
+            'POST',
+            $this->base . '/servers/' . rawurlencode($serverId) . '/reboot'
+        );
+        FileLog::write('timeweb', 'cloud_init:repush_reboot', [
+            'http' => $reboot['status'],
+            'body' => mb_substr($reboot['body'], 0, 400),
+        ]);
+        if ($reboot['status'] < 200 || $reboot['status'] >= 300) {
+            throw new \RuntimeException(
+                'Timeweb reboot HTTP ' . $reboot['status'] . ': ' . mb_substr($reboot['body'], 0, 400)
+            );
         }
     }
 }

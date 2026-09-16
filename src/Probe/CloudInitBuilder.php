@@ -4,84 +4,52 @@ declare(strict_types=1);
 
 namespace Wlsearch\Probe;
 
+/**
+ * User-data для Timeweb/Selectel.
+ *
+ * Timeweb docs: надёжнее передавать `#!/bin/sh` (они сами обернут в runcmd),
+ * чем сложный #cloud-config с огромным base64 в YAML — тот часто молча не выполняется,
+ * при этом ручной paste тех же команд на VPS работает сразу.
+ */
 final class CloudInitBuilder
 {
     /**
-     * Fast probe on candidate VPS: HTTP :80 + HTTPS :443 with WL_PROBE_OK.
-     * Prefer python3 (no apt update — was ~5–15 min); fallback nginx.
+     * Probe HTTP :80 + HTTPS :443 с телом WL_PROBE_OK …
      */
     public static function forRun(string $provider, int $runId): string
     {
         $provider = preg_replace('/[^a-z0-9_\-]/i', '', $provider) ?: 'unknown';
         $runId = (int) $runId;
+        $pyB64 = base64_encode(self::probePythonSource());
+        // Разбиваем base64 на короткие строки — безопаснее для shell/heredoc у провайдера
+        $pyB64Wrapped = trim(chunk_split($pyB64, 76, "\n"));
 
-        $py = self::probePythonSource();
-        $pyB64 = base64_encode($py);
-
-        return <<<YAML
-#cloud-config
-package_update: false
-package_upgrade: false
-bootcmd:
-  - [ cloud-init-per, once, wlsearch-stamp, sh, -c, "date -u > /var/log/wlsearch-cloud-init-started" ]
-runcmd:
-  - |
-    set +e
-    mkdir -p /var/www/html /etc/wlsearch-ssl /usr/local/bin /var/log
-    date -u > /var/log/wlsearch-cloud-init-runcmd
-    IP=\$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{print \$7; exit}' || true)
-    if [ -z "\$IP" ]; then
-      IP=\$(hostname -I 2>/dev/null | awk '{print \$1}')
-    fi
-    TS=\$(date -u +%Y-%m-%dT%H:%M:%SZ)
-    printf 'WL_PROBE_OK %s run_%d %s %s\\n' '{$provider}' {$runId} "\$IP" "\$TS" > /var/www/html/index.html
-    chmod 644 /var/www/html/index.html
-    export WLSEARCH_IP="\$IP"
-
-    if command -v python3 >/dev/null 2>&1; then
-      echo '{$pyB64}' | base64 -d > /usr/local/bin/wlsearch-probe.py
-      chmod +x /usr/local/bin/wlsearch-probe.py
-      (command -v fuser >/dev/null 2>&1 && fuser -k 80/tcp 443/tcp) || true
-      systemctl stop nginx 2>/dev/null || service nginx stop 2>/dev/null || true
-      pkill -f wlsearch-probe.py 2>/dev/null || true
-      nohup env WLSEARCH_IP="\$IP" python3 /usr/local/bin/wlsearch-probe.py >/var/log/wlsearch-probe.log 2>&1 &
-      sleep 1
-      exit 0
-    fi
-
-    export DEBIAN_FRONTEND=noninteractive
-    apt-get install -y --no-install-recommends nginx openssl >>/var/log/wlsearch-apt.log 2>&1 \\
-      || { apt-get update -qq >>/var/log/wlsearch-apt.log 2>&1; apt-get install -y --no-install-recommends nginx openssl >>/var/log/wlsearch-apt.log 2>&1; }
-    mkdir -p /etc/nginx/ssl
-    openssl req -x509 -nodes -newkey rsa:2048 -days 3650 \\
-      -keyout /etc/nginx/ssl/probe.key -out /etc/nginx/ssl/probe.crt \\
-      -subj "/CN=\${IP}/O=wlsearch-probe" 2>/dev/null || true
-    printf '%s\\n' \\
-      'server {' \\
-      '    listen 80 default_server;' \\
-      '    listen [::]:80 default_server;' \\
-      '    root /var/www/html;' \\
-      '    index index.html;' \\
-      '    server_name _;' \\
-      '    location / { }' \\
-      '}' \\
-      'server {' \\
-      '    listen 443 ssl default_server;' \\
-      '    listen [::]:443 ssl default_server;' \\
-      '    ssl_certificate /etc/nginx/ssl/probe.crt;' \\
-      '    ssl_certificate_key /etc/nginx/ssl/probe.key;' \\
-      '    ssl_protocols TLSv1.2 TLSv1.3;' \\
-      '    root /var/www/html;' \\
-      '    index index.html;' \\
-      '    server_name _;' \\
-      '    location / { }' \\
-      '}' \\
-      > /etc/nginx/sites-available/default
-    ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default || true
-    nginx -t
-    systemctl enable nginx || true
-    systemctl restart nginx || service nginx restart || true
-YAML;
+        return <<<SH
+#!/bin/sh
+# wlsearch probe run_{$runId}
+exec >>/var/log/wlsearch-cloud-init.log 2>&1
+echo "wlsearch-cloud-init start \$(date -u -Iseconds)"
+mkdir -p /var/www/html /etc/wlsearch-ssl /usr/local/bin /var/log
+IP=\$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{print \$7; exit}')
+if [ -z "\$IP" ]; then
+  IP=\$(hostname -I 2>/dev/null | awk '{print \$1}')
+fi
+TS=\$(date -u +%Y-%m-%dT%H:%M:%SZ)
+printf 'WL_PROBE_OK %s run_%d %s %s\\n' '{$provider}' {$runId} "\$IP" "\$TS" > /var/www/html/index.html
+chmod 644 /var/www/html/index.html
+base64 -d > /usr/local/bin/wlsearch-probe.py <<'WLSEARCH_PY_B64'
+{$pyB64Wrapped}
+WLSEARCH_PY_B64
+chmod +x /usr/local/bin/wlsearch-probe.py
+(command -v fuser >/dev/null 2>&1 && fuser -k 80/tcp 443/tcp) || true
+systemctl stop nginx 2>/dev/null || service nginx stop 2>/dev/null || true
+pkill -f '/usr/local/bin/wlsearch-probe.py' 2>/dev/null || true
+nohup env WLSEARCH_IP="\$IP" python3 /usr/local/bin/wlsearch-probe.py >>/var/log/wlsearch-probe.log 2>&1 &
+sleep 1
+echo "wlsearch-cloud-init done IP=\$IP \$(date -u -Iseconds)"
+curl -sS -m 2 http://127.0.0.1/ | head -c 120 || true
+echo
+SH;
     }
 
     /**
@@ -89,30 +57,8 @@ YAML;
      */
     public static function manualInstallBash(string $provider, int $runId): string
     {
-        $provider = preg_replace('/[^a-z0-9_\-]/i', '', $provider) ?: 'unknown';
-        $runId = (int) $runId;
-        $py = self::probePythonSource();
-        $pyB64 = base64_encode($py);
-
-        return <<<BASH
-#!/bin/bash
-set -e
-mkdir -p /var/www/html /etc/wlsearch-ssl /usr/local/bin /var/log
-IP=\$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{print \$7; exit}' || true)
-if [ -z "\$IP" ]; then IP=\$(hostname -I 2>/dev/null | awk '{print \$1}'); fi
-TS=\$(date -u +%Y-%m-%dT%H:%M:%SZ)
-printf 'WL_PROBE_OK %s run_%d %s %s\\n' '{$provider}' {$runId} "\$IP" "\$TS" > /var/www/html/index.html
-chmod 644 /var/www/html/index.html
-echo '{$pyB64}' | base64 -d > /usr/local/bin/wlsearch-probe.py
-chmod +x /usr/local/bin/wlsearch-probe.py
-(command -v fuser >/dev/null 2>&1 && fuser -k 80/tcp 443/tcp) || true
-systemctl stop nginx 2>/dev/null || service nginx stop 2>/dev/null || true
-pkill -f wlsearch-probe.py 2>/dev/null || true
-nohup env WLSEARCH_IP="\$IP" python3 /usr/local/bin/wlsearch-probe.py >/var/log/wlsearch-probe.log 2>&1 &
-sleep 1
-echo "probe up IP=\$IP"
-curl -sS "http://127.0.0.1/" | head -c 200; echo
-BASH;
+        // Тот же скрипт, что уходит в API — чтобы ручной и авто путь совпадали
+        return self::forRun($provider, $runId);
     }
 
     private static function probePythonSource(): string

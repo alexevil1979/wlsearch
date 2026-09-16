@@ -447,10 +447,43 @@ final class Worker
         }
 
         $age = $this->updatedAgeSeconds($run);
-        $waitMsg = 'ожидание probe ' . $age . 'с: ' . ($result['error'] ?? 'no probe');
+        $waitMsg = 'ожидание probe ' . $age . 's: ' . ($result['error'] ?? 'no probe');
         $this->pdo->prepare(
             'UPDATE runs SET error_message = ? WHERE id = ? AND state = \'BOOTSTRAPPING\''
         )->execute([mb_substr($waitMsg, 0, 500), $id]);
+
+        // Один раз: если cloud-init с create не поднял probe — перезалить user-data и reboot
+        if ($age >= 90 && $serverId !== '' && (string) ($run['provider'] ?? '') === 'timeweb') {
+            $meta = [];
+            if (!empty($run['provider_meta'])) {
+                $decoded = json_decode((string) $run['provider_meta'], true);
+                if (is_array($decoded)) {
+                    $meta = $decoded;
+                }
+            }
+            if (empty($meta['probe_repush'])) {
+                try {
+                    $script = CloudInitBuilder::forRun((string) $run['provider'], $id);
+                    $provider = ProviderFactory::forRun($run);
+                    if (method_exists($provider, 'repushCloudInitAndReboot')) {
+                        /** @var \Wlsearch\Provider\TimewebProvider $provider */
+                        $provider->repushCloudInitAndReboot($serverId, $script);
+                        $meta['probe_repush'] = 1;
+                        $meta['probe_repush_at'] = date('c');
+                        $this->pdo->prepare(
+                            'UPDATE runs SET provider_meta = ?, error_message = ? WHERE id = ?'
+                        )->execute([
+                            json_encode($meta, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                            mb_substr('cloud-init не ответил — перезалил user-data + reboot, жду probe', 0, 500),
+                            $id,
+                        ]);
+                        fwrite(STDOUT, "run #{$id}: repush cloud_init + reboot\n");
+                    }
+                } catch (\Throwable $e) {
+                    fwrite(STDERR, "run #{$id}: probe repush failed: " . $e->getMessage() . "\n");
+                }
+            }
+        }
 
         $timeout = Settings::int('BOOTSTRAP_TIMEOUT_SEC', Env::int('BOOTSTRAP_TIMEOUT_SEC', 600));
         if ($age > $timeout) {

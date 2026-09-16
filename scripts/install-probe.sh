@@ -1,9 +1,11 @@
-#!/bin/bash
-# Paste on candidate VPS when cloud-init did not start probe. Usage: bash install-probe.sh 25 timeweb
+#!/bin/sh
+# Manual fallback when create-time cloud-init did not start probe.
+# Usage: bash install-probe.sh 26 timeweb
+# (same body as CloudInitBuilder::forRun — keep in sync conceptually)
 set -e
-RUN_ID="${1:-25}"
+RUN_ID="${1:-0}"
 PROVIDER="${2:-timeweb}"
-mkdir -p /var/www/html /etc/wlsearch-ssl /var/log
+mkdir -p /var/www/html /etc/wlsearch-ssl /usr/local/bin /var/log
 IP=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}' || true)
 if [ -z "$IP" ]; then IP=$(hostname -I 2>/dev/null | awk '{print $1}'); fi
 TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -11,7 +13,7 @@ printf 'WL_PROBE_OK %s run_%s %s %s\n' "$PROVIDER" "$RUN_ID" "$IP" "$TS" > /var/
 chmod 644 /var/www/html/index.html
 (command -v fuser >/dev/null 2>&1 && fuser -k 80/tcp 443/tcp) || true
 systemctl stop nginx 2>/dev/null || true
-pkill -f 'wlsearch-probe|http.server' 2>/dev/null || true
+pkill -f wlsearch-probe.py 2>/dev/null || true
 cat > /usr/local/bin/wlsearch-probe.py <<'PY'
 #!/usr/bin/env python3
 import http.server, ssl, threading, pathlib, subprocess, os, sys
