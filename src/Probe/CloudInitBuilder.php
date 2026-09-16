@@ -105,12 +105,19 @@ WLSEARCH_PY_B64
   nohup env WLSEARCH_IP="\$IP" python3 /usr/local/bin/wlsearch-probe.py >>/var/log/wlsearch-probe.log 2>&1 &
 fi
 
-if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi 'Status: active'; then
-  ufw allow 80/tcp || true
-  ufw allow 443/tcp || true
+if command -v ufw >/dev/null 2>&1; then
+  # ephemeral probe VPS: ufw после apt часто DROP снаружи (localhost ок, curl с servv висит)
+  ufw --force disable >>/var/log/wlsearch-cloud-init.log 2>&1 || true
 fi
-iptables -C INPUT -p tcp --dport 80 -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport 80 -j ACCEPT || true
-iptables -C INPUT -p tcp --dport 443 -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport 443 -j ACCEPT || true
+iptables -P INPUT ACCEPT 2>/dev/null || true
+iptables -P FORWARD ACCEPT 2>/dev/null || true
+# убрать DROP/REJECT на 80/443 если висят выше ACCEPT
+iptables -D INPUT -p tcp --dport 80 -j DROP 2>/dev/null || true
+iptables -D INPUT -p tcp --dport 443 -j DROP 2>/dev/null || true
+iptables -D INPUT -p tcp --dport 80 -j REJECT 2>/dev/null || true
+iptables -D INPUT -p tcp --dport 443 -j REJECT 2>/dev/null || true
+iptables -C INPUT -p tcp --dport 80 -j ACCEPT 2>/dev/null || iptables -I INPUT 1 -p tcp --dport 80 -j ACCEPT || true
+iptables -C INPUT -p tcp --dport 443 -j ACCEPT 2>/dev/null || iptables -I INPUT 1 -p tcp --dport 443 -j ACCEPT || true
 sleep 1
 ss -lntp 2>/dev/null | grep -E ':80|:443' || true
 curl -sS -m 3 http://127.0.0.1/ | head -c 160 || true

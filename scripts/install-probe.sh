@@ -40,6 +40,10 @@ server {
 NGX
 ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default
 nginx -t && systemctl restart nginx
-iptables -I INPUT -p tcp --dport 80 -j ACCEPT 2>/dev/null || true
-iptables -I INPUT -p tcp --dport 443 -j ACCEPT 2>/dev/null || true
+# снаружи висит = ufw/iptables DROP (localhost при этом ок)
+ufw --force disable 2>/dev/null || true
+iptables -P INPUT ACCEPT 2>/dev/null || true
+iptables -I INPUT 1 -p tcp --dport 80 -j ACCEPT 2>/dev/null || true
+iptables -I INPUT 1 -p tcp --dport 443 -j ACCEPT 2>/dev/null || true
 curl -sS http://127.0.0.1/; echo
+echo "check from outside: curl --connect-timeout 5 http://$IP/"
