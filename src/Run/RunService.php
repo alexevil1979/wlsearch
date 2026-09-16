@@ -432,15 +432,25 @@ final class RunService
         if ($run === null) {
             throw new \RuntimeException('Run not found');
         }
-        $stmt = $this->pdo->prepare('UPDATE runs SET keep_on_fail = 1, updated_at = NOW() WHERE id = ?');
-        $stmt->execute([$runId]);
-
-        if (in_array($run['state'], ['FAIL_BS', 'FAIL_CONTROL', 'ERROR'], true)) {
-            $this->updateState($runId, 'KEEP', $run['verdict'], null);
+        if (in_array($run['state'], ['DESTROYED', 'DESTROYING'], true)) {
+            throw new \RuntimeException('Уже уничтожен — KEEP невозможен');
         }
 
-        Audit::log($actor, 'run.keep', 'run', (string) $runId);
-        $this->tg->send("wlsearch: KEEP run #{$runId} ip=" . ($run['ipv4'] ?? '-'));
+        $ipv4 = (string) ($run['ipv4'] ?? '');
+        $msg = $ipv4 !== ''
+            ? 'зарезервировано (KEEP) ip=' . $ipv4
+            : 'зарезервировано (KEEP)';
+
+        // Сразу KEEP: worker больше не трогает; VPS не destroy
+        $stmt = $this->pdo->prepare(
+            "UPDATE runs SET keep_on_fail = 1, state = 'KEEP', verdict = 'KEEP',
+                    error_message = ?, updated_at = NOW()
+             WHERE id = ?"
+        );
+        $stmt->execute([mb_substr($msg, 0, 500), $runId]);
+
+        Audit::log($actor, 'run.keep', 'run', (string) $runId, ['ipv4' => $ipv4]);
+        $this->tg->send("wlsearch: KEEP run #{$runId} ip=" . ($ipv4 !== '' ? $ipv4 : '-'));
     }
 
     public function retryControl(int $runId, string $actor): void
