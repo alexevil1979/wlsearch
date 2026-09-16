@@ -456,42 +456,52 @@ final class Worker
             }
         }
 
-        // Якорь возраста: server_created_at → bootstrap_at → now (не сбрасывать каждый тик!)
-        $anchor = strtotime((string) ($run['server_created_at'] ?? '')) ?: 0;
-        if ($anchor <= 0) {
-            $anchor = isset($meta['bootstrap_at']) ? (int) $meta['bootstrap_at'] : 0;
+        // Возраст = от самого раннего якоря (сервер/очередь), НЕ от «сейчас»
+        $candidates = [];
+        foreach (['server_created_at', 'created_at'] as $field) {
+            $raw = trim((string) ($run[$field] ?? ''));
+            if ($raw === '' || $raw === '0000-00-00 00:00:00') {
+                continue;
+            }
+            $ts = strtotime($raw);
+            if ($ts !== false && $ts > 0) {
+                $candidates[] = $ts;
+            }
         }
-        if ($anchor <= 0) {
-            $anchor = time();
+        if (isset($meta['bootstrap_at']) && (int) $meta['bootstrap_at'] > 0) {
+            $candidates[] = (int) $meta['bootstrap_at'];
         }
-        if (!isset($meta['bootstrap_at']) || (int) $meta['bootstrap_at'] <= 0) {
-            $meta['bootstrap_at'] = $anchor;
-            $this->saveMeta($id, $meta);
-        }
-        // после reboot ждём от reboot_at, иначе от создания сервера
+        $anchor = $candidates !== [] ? min($candidates) : time();
+        $meta['bootstrap_at'] = $anchor;
+        $this->saveMeta($id, $meta);
+
         $rebootAt = isset($meta['probe_reboot_at']) ? (int) $meta['probe_reboot_at'] : 0;
         $age = max(0, time() - $anchor);
         $ageSinceReboot = $rebootAt > 0 ? max(0, time() - $rebootAt) : null;
 
         $timeout = Settings::int('BOOTSTRAP_TIMEOUT_SEC', Env::int('BOOTSTRAP_TIMEOUT_SEC', 600));
-        $rebootAfterSec = 60; // не ждать 20 минут — reboot через ~1 мин без probe
+        $rebootAfterSec = 60;
         $waitAfterRebootSec = min(300, max(120, (int) ($timeout / 2)));
-        // если в meta старый сброшенный bootstrap_at (~now), а сервер старше — берём сервер
-        $serverTs = strtotime((string) ($run['server_created_at'] ?? '')) ?: 0;
-        if ($serverTs > 0 && ($anchor <= 0 || $anchor > $serverTs + 30)) {
-            $anchor = $serverTs;
-            $meta['bootstrap_at'] = $anchor;
-            $this->saveMeta($id, $meta);
-            $age = max(0, time() - $anchor);
-        }
+
+        fwrite(STDOUT, sprintf(
+            "run #%d: bs3 age=%ds server_created_at=%s created_at=%s reboot=%s serverId=%s\n",
+            $id,
+            $age,
+            (string) ($run['server_created_at'] ?? '-'),
+            (string) ($run['created_at'] ?? '-'),
+            !empty($meta['probe_reboot']) ? '1' : '0',
+            $serverId !== '' ? $serverId : '-'
+        ));
         FileLog::write('probe', 'bootstrap:tick', [
             'run_id' => $id,
-            'code' => 'bs3',
+            'code' => 'bs4',
             'ipv4' => $ipv4,
             'age_s' => $age,
             'anchor' => $anchor,
             'server_created_at' => (string) ($run['server_created_at'] ?? ''),
+            'created_at' => (string) ($run['created_at'] ?? ''),
             'probe_reboot' => !empty($meta['probe_reboot']),
+            'server_id' => $serverId,
             'reboot_after_s' => $rebootAfterSec,
         ]);
 
