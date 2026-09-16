@@ -10,6 +10,7 @@
 /** @var int $dailyCapacity */
 /** @var int $createsPerAccount */
 /** @var int $enabledAccountCount */
+/** @var array<int, array{used:int,left:int}> $accountUsage */
 /** @var list<array<string,mixed>> $timewebAccounts */
 /** @var list<array<string,mixed>> $selectelAccounts */
 use Wlsearch\Support\View;
@@ -101,12 +102,27 @@ $defaultCount = max(1, min(10, $dailyCapacity > 0 ? $dailyCapacity : 1));
         </select>
 
         <label for="count">Сколько IP перебрать (очередь)</label>
-        <input id="count" name="count" type="number" min="1" max="<?= max(1, $dailyCapacity) ?>" value="<?= (int) $defaultCount ?>" required>
+        <input id="count" name="count" type="number" min="1" max="100"
+               value="<?= (int) $defaultCount ?>" required>
         <p class="muted">
             Сегодня осталось ≈ <strong><?= (int) $dailyCapacity ?></strong>
-            (<?= (int) $createsPerAccount ?> × <?= (int) $enabledAccountCount ?> вкл. аккаунтов).
-            Параллельно живых VM: <?= (int) $maxParallel ?> — остальные ждут в ORDERING.
+            (лимит <?= (int) $createsPerAccount ?> VPS/сутки на аккаунт; считаются только реально созданные серверы, не SKIPPED).
+            Параллельно живых VM: <?= (int) $maxParallel ?>.
         </p>
+        <?php if (!empty($accountUsage)): ?>
+            <p class="muted" style="margin-top:0.35rem">
+                <?php foreach ($accountUsage as $aid => $u): ?>
+                    #<?= (int) $aid ?>: использовано <?= (int) $u['used'] ?>/<?= (int) $createsPerAccount ?>
+                    (осталось <?= (int) $u['left'] ?>)<?= $aid !== array_key_last($accountUsage) ? '; ' : '' ?>
+                <?php endforeach; ?>
+            </p>
+        <?php endif; ?>
+        <?php if ($dailyCapacity <= 0): ?>
+            <div class="flash flash-error" style="margin-top:0.75rem">
+                Лимит VPS на сегодня исчерпан для включённых аккаунтов (или баланс &lt; ~880 ₽).
+                Включите другой аккаунт в <a href="/accounts">Аккаунты</a>, пополните баланс, либо дождитесь завтра.
+            </div>
+        <?php endif; ?>
 
         <label style="display:inline-flex;align-items:center;gap:0.4rem;margin-top:0.85rem">
             <input type="checkbox" name="stop_on_pass" value="1" checked>
@@ -122,9 +138,9 @@ $defaultCount = max(1, min(10, $dailyCapacity > 0 ? $dailyCapacity : 1));
         <input id="comment" name="comment" type="text" maxlength="255" placeholder="опционально">
 
         <div style="margin-top:1.2rem;display:flex;flex-wrap:wrap;gap:0.6rem;align-items:center">
-            <button class="btn" type="submit" <?= $anyProvider && $dailyCapacity > 0 ? '' : 'disabled' ?>>Создать очередь</button>
+            <button class="btn" type="submit" <?= $anyProvider ? '' : 'disabled' ?>>Создать очередь</button>
             <a class="btn btn-secondary" href="/runs">К списку</a>
-            <a class="btn btn-danger" href="/runs" title="На странице Runs — красная кнопка Остановить очередь">Runs → стоп</a>
+            <a class="btn btn-danger" href="/runs">Остановить очередь (на Runs)</a>
         </div>
     </form>
 </div>

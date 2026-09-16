@@ -182,8 +182,13 @@ final class RunService
     public function accountCreateBudget(array $pool): array
     {
         $budget = [];
+        // Считаем только run, где реально создали VPS (не SKIPPED/ожидание запаса без сервера)
         $stmt = $this->pdo->prepare(
-            'SELECT COUNT(*) FROM runs WHERE provider_account_id = ? AND DATE(created_at) = CURDATE()'
+            "SELECT COUNT(*) FROM runs
+             WHERE provider_account_id = ?
+               AND DATE(created_at) = CURDATE()
+               AND provider_server_id IS NOT NULL
+               AND provider_server_id != ''"
         );
         foreach ($pool as $row) {
             $id = (int) $row['id'];
@@ -192,6 +197,32 @@ final class RunService
             $budget[$id] = max(0, self::CREATES_PER_ACCOUNT_DAY - $used);
         }
         return $budget;
+    }
+
+    /**
+     * @param list<array<string,mixed>> $pool
+     * @return array<int, array{used:int,left:int}>
+     */
+    public function accountCreateUsage(array $pool): array
+    {
+        $out = [];
+        $stmt = $this->pdo->prepare(
+            "SELECT COUNT(*) FROM runs
+             WHERE provider_account_id = ?
+               AND DATE(created_at) = CURDATE()
+               AND provider_server_id IS NOT NULL
+               AND provider_server_id != ''"
+        );
+        foreach ($pool as $row) {
+            $id = (int) $row['id'];
+            $stmt->execute([$id]);
+            $used = (int) $stmt->fetchColumn();
+            $out[$id] = [
+                'used' => $used,
+                'left' => max(0, self::CREATES_PER_ACCOUNT_DAY - $used),
+            ];
+        }
+        return $out;
     }
 
     /** How many creates left today across enabled/selected accounts. */

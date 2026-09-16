@@ -38,6 +38,7 @@ final class RunsController
         $selAccounts = $accSvc->listAll('selectel');
         $twEnabled = array_values(array_filter($twAccounts, static fn (array $a): bool => (int) $a['enabled'] === 1));
         $capacity = $runSvc->dailyCreateCapacity('timeweb');
+        $usage = $runSvc->accountCreateUsage($twEnabled);
         View::render('runs/new', [
             'title' => 'Запуск прогона',
             'user' => AuthService::user(),
@@ -52,6 +53,7 @@ final class RunsController
             'defaultSelectelRegion' => Env::get('SELECTEL_REGION', 'ru-9a'),
             'maxParallel' => max(1, Settings::int('MAX_PARALLEL_VMS', 1)),
             'dailyCapacity' => $capacity,
+            'accountUsage' => $usage,
             'createsPerAccount' => RunService::CREATES_PER_ACCOUNT_DAY,
             'enabledAccountCount' => count($twEnabled),
             'bsbordConfigured' => (Env::get('BSBORD_API_TOKEN', '') ?? '') !== ''
