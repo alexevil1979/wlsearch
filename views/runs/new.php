@@ -26,11 +26,14 @@ $selectelAccounts = $selectelAccounts ?? [];
 $yandexAccounts = $yandexAccounts ?? [];
 $preferredProvider = $preferredProvider ?? ($yandexConfigured ? 'yandex' : ($timewebConfigured ? 'timeweb' : 'selectel'));
 $dailyCapacity = (int) ($dailyCapacity ?? 0);
-$createsPerAccount = (int) ($createsPerAccount ?? 10);
+$createsPerAccount = (int) ($createsPerAccount ?? 0);
 $enabledAccountCount = (int) ($enabledAccountCount ?? 0);
 $maxParallel = max(1, (int) ($maxParallel ?? 1));
 $accountUsage = $accountUsage ?? [];
-$defaultCount = max(1, min(10, $dailyCapacity > 0 ? $dailyCapacity : 1));
+$defaultCount = max(1, min(10, $dailyCapacity > 0 ? min($dailyCapacity, 10) : 1));
+$limitHint = $createsPerAccount > 0
+    ? ((int) $createsPerAccount . ' IP/сутки на аккаунт')
+    : 'без лимита на аккаунт';
 $defaultRegionValue = match ($preferredProvider) {
     'yandex' => (string) ($defaultYandexRegion ?? 'ru-central1-a'),
     'selectel' => (string) ($defaultSelectelRegion ?? 'ru-9a'),
@@ -40,7 +43,7 @@ $defaultRegionValue = match ($preferredProvider) {
 <h1>Запуск прогона</h1>
 <p class="muted">
     Последовательно: одновременно только <?= (int) $maxParallel ?> VPS (create → check → destroy → следующий).
-    Аккаунты: <a href="/accounts">/accounts</a>.
+    Аккаунты: <a href="/accounts">/accounts</a>. Лимит: <a href="/settings">настройки</a>.
 </p>
 
 <?php if (!$anyProvider): ?>
@@ -61,7 +64,7 @@ $defaultRegionValue = match ($preferredProvider) {
 
         <div id="acc-tw" style="margin:0.75rem 0;<?= $preferredProvider === 'timeweb' ? '' : 'display:none' ?>">
             <p style="margin:0 0 0.4rem;font-weight:600">Аккаунты Timeweb</p>
-            <p class="muted" style="margin:0 0 0.5rem">Галочки = участвуют. Лимит <?= (int) $createsPerAccount ?> create/сутки на аккаунт.</p>
+            <p class="muted" style="margin:0 0 0.5rem">Галочки = участвуют. <?= View::e($limitHint) ?>.</p>
             <?php if ($timewebAccounts === []): ?>
                 <p class="muted">Нет аккаунтов — <a href="/accounts">добавить</a></p>
             <?php else: ?>
@@ -101,7 +104,7 @@ $defaultRegionValue = match ($preferredProvider) {
 
         <div id="acc-yc" style="margin:0.75rem 0;<?= $preferredProvider === 'yandex' ? '' : 'display:none' ?>">
             <p style="margin:0 0 0.4rem;font-weight:600">Аккаунты Yandex Cloud</p>
-            <p class="muted" style="margin:0 0 0.5rem">Галочки = участвуют. Лимит <?= (int) $createsPerAccount ?> create/сутки на аккаунт.</p>
+            <p class="muted" style="margin:0 0 0.5rem">Галочки = участвуют. <?= View::e($limitHint) ?>.</p>
             <?php if ($yandexAccounts === []): ?>
                 <p class="muted">Нет аккаунтов — <a href="/accounts">добавить</a></p>
             <?php else: ?>
@@ -141,10 +144,10 @@ $defaultRegionValue = match ($preferredProvider) {
                value="<?= (int) $defaultCount ?>" required>
         <p class="muted">
             Сегодня осталось ≈ <strong><?= (int) $dailyCapacity ?></strong>
-            (лимит <?= (int) $createsPerAccount ?> IP/сутки на аккаунт; в лимите только выданные IPv4, попытки без IP не считаются).
+            (<?= View::e($limitHint) ?>; в лимите только выданные IPv4).
             Параллельно живых VM: <?= (int) $maxParallel ?>.
         </p>
-        <?php if (!empty($accountUsage)): ?>
+        <?php if (!empty($accountUsage) && $createsPerAccount > 0): ?>
             <p class="muted" style="margin-top:0.35rem">
                 <?php foreach ($accountUsage as $aid => $u): ?>
                     #<?= (int) $aid ?>: выдано <?= (int) $u['used'] ?>/<?= (int) $createsPerAccount ?>
@@ -152,10 +155,10 @@ $defaultRegionValue = match ($preferredProvider) {
                 <?php endforeach; ?>
             </p>
         <?php endif; ?>
-        <?php if ($dailyCapacity <= 0): ?>
+        <?php if ($createsPerAccount > 0 && $dailyCapacity <= 0): ?>
             <div class="flash flash-error" style="margin-top:0.75rem">
                 Лимит выданных IP на сегодня исчерпан для включённых аккаунтов.
-                Включите другой аккаунт в <a href="/accounts">Аккаунты</a> либо дождитесь завтра.
+                Включите другой аккаунт в <a href="/accounts">Аккаунты</a> либо дождитесь завтра / смените лимит в <a href="/settings">настройках</a>.
             </div>
         <?php endif; ?>
 

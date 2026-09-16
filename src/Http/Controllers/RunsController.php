@@ -49,7 +49,8 @@ final class RunsController
         };
         $prefEnabled = array_values(array_filter($prefAccounts, static fn (array $a): bool => (int) $a['enabled'] === 1));
         $capacity = $runSvc->dailyCreateCapacity($preferred);
-        $usage = $runSvc->accountCreateUsage($prefEnabled);
+        $usage = $runSvc->accountCreateUsage($prefEnabled, $preferred);
+        $createsPerAccount = $runSvc->createsPerAccountDay($preferred);
         View::render('runs/new', [
             'title' => 'Запуск прогона',
             'user' => AuthService::user(),
@@ -69,7 +70,7 @@ final class RunsController
             'maxParallel' => max(1, Settings::int('MAX_PARALLEL_VMS', 1)),
             'dailyCapacity' => $capacity,
             'accountUsage' => $usage,
-            'createsPerAccount' => RunService::CREATES_PER_ACCOUNT_DAY,
+            'createsPerAccount' => $createsPerAccount,
             'enabledAccountCount' => count($prefEnabled),
             'bsbordConfigured' => (Env::get('BSBORD_API_TOKEN', '') ?? '') !== ''
                 || (Settings::get('BSBORD_API_TOKEN', '') ?? '') !== '',

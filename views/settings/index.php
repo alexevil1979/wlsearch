@@ -22,7 +22,8 @@ $bsSelected = $bsSelected ?? [];
         <?php
         $labels = [
             'MAX_PARALLEL_VMS' => 'Параллельных живых VM (1 = строго последовательно)',
-            'MAX_CREATES_PER_DAY' => 'Fallback creates/day (если нет аккаунтов)',
+            'MAX_CREATES_PER_DAY' => 'Fallback creates/day (если нет аккаунтов / без лимита на аккаунт)',
+            'CREATES_PER_ACCOUNT_DAY' => 'Create/сутки на аккаунт (0 = без лимита; пусто = timeweb 10, yandex/selectel 0)',
             'MAX_DAILY_SPEND_RUB' => 'Макс. оценка spend ₽/сутки (справочно)',
             'BS_TASK_TTL_SEC' => 'TTL BS-задачи (сек)',
             'PROVISION_TIMEOUT_SEC' => 'Timeout provision (сек)',

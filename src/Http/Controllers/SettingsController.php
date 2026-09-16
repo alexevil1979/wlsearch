@@ -19,6 +19,7 @@ final class SettingsController
     private const EDITABLE = [
         'MAX_PARALLEL_VMS',
         'MAX_CREATES_PER_DAY',
+        'CREATES_PER_ACCOUNT_DAY',
         'MAX_DAILY_SPEND_RUB',
         'TELEGRAM_BOT_TOKEN',
         'TELEGRAM_CHAT_ID',

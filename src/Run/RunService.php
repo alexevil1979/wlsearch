@@ -29,8 +29,22 @@ final class RunService
         'PASS', 'FAIL_BS', 'FAIL_CONTROL', 'ERROR', 'DESTROYED', 'KEEP', 'SKIPPED',
     ];
 
-    /** Timeweb daily floating-IP create limit per account (and soft create budget). */
+    /** Default Timeweb floating-IP soft limit; overridden by CREATES_PER_ACCOUNT_DAY (0 = unlimited). */
     public const CREATES_PER_ACCOUNT_DAY = 10;
+
+    /**
+     * Дневной лимит create/аккаунт. 0 = без лимита.
+     * Настройка CREATES_PER_ACCOUNT_DAY; если не задана — timeweb=10, остальные=0.
+     */
+    public function createsPerAccountDay(?string $provider = null): int
+    {
+        $raw = Settings::get('CREATES_PER_ACCOUNT_DAY');
+        if ($raw !== null && $raw !== '') {
+            return max(0, (int) $raw);
+        }
+        return strtolower((string) $provider) === 'timeweb' ? self::CREATES_PER_ACCOUNT_DAY : 0;
+    }
+
 
     private PDO $pdo;
     private TelegramNotifier $tg;
@@ -85,11 +99,12 @@ final class RunService
             throw new \RuntimeException('Нет включённых аккаунтов для ' . $provider . ' — отметьте галочки в /accounts');
         }
 
-        $budget = $this->accountCreateBudget($pool);
+        $budget = $this->accountCreateBudget($pool, $provider);
+        $limitPerAcc = $this->createsPerAccountDay($provider);
         $maxByAccounts = array_sum($budget);
-        if ($maxByAccounts <= 0 && $pool !== []) {
+        if ($limitPerAcc > 0 && $maxByAccounts <= 0 && $pool !== []) {
             throw new \RuntimeException(
-                'Дневной лимит create исчерпан: ' . self::CREATES_PER_ACCOUNT_DAY . ' на аккаунт (сегодня уже использовано)'
+                'Дневной лимит create исчерпан: ' . $limitPerAcc . ' на аккаунт (сегодня уже использовано)'
             );
         }
 
@@ -179,9 +194,13 @@ final class RunService
      * @param list<array<string,mixed>> $pool
      * @return array<int, int> accountId => remaining creates today
      */
-    public function accountCreateBudget(array $pool): array
+    public function accountCreateBudget(array $pool, ?string $provider = null): array
     {
         $budget = [];
+        if ($provider === null && $pool !== []) {
+            $provider = (string) ($pool[0]['provider'] ?? '');
+        }
+        $limit = $this->createsPerAccountDay($provider);
         // Лимит Timeweb ~10 floating IP/сутки — считаем только run с выданным IPv4
         $stmt = $this->pdo->prepare(
             "SELECT COUNT(*) FROM runs
@@ -192,9 +211,13 @@ final class RunService
         );
         foreach ($pool as $row) {
             $id = (int) $row['id'];
+            if ($limit <= 0) {
+                $budget[$id] = 10000;
+                continue;
+            }
             $stmt->execute([$id]);
             $used = (int) $stmt->fetchColumn();
-            $budget[$id] = max(0, self::CREATES_PER_ACCOUNT_DAY - $used);
+            $budget[$id] = max(0, $limit - $used);
         }
         return $budget;
     }
@@ -203,9 +226,13 @@ final class RunService
      * @param list<array<string,mixed>> $pool
      * @return array<int, array{used:int,left:int}>
      */
-    public function accountCreateUsage(array $pool): array
+    public function accountCreateUsage(array $pool, ?string $provider = null): array
     {
         $out = [];
+        if ($provider === null && $pool !== []) {
+            $provider = (string) ($pool[0]['provider'] ?? '');
+        }
+        $limit = $this->createsPerAccountDay($provider);
         $stmt = $this->pdo->prepare(
             "SELECT COUNT(*) FROM runs
              WHERE provider_account_id = ?
@@ -219,7 +246,7 @@ final class RunService
             $used = (int) $stmt->fetchColumn();
             $out[$id] = [
                 'used' => $used,
-                'left' => max(0, self::CREATES_PER_ACCOUNT_DAY - $used),
+                'left' => $limit <= 0 ? 10000 : max(0, $limit - $used),
             ];
         }
         return $out;
@@ -241,7 +268,11 @@ final class RunService
             )->fetchColumn();
             return max(0, $fallback - $today);
         }
-        return array_sum($this->accountCreateBudget($pool));
+        $limit = $this->createsPerAccountDay($provider);
+        if ($limit <= 0) {
+            return Settings::int('MAX_CREATES_PER_DAY', 100);
+        }
+        return array_sum($this->accountCreateBudget($pool, $provider));
     }
 
     /** @param list<array<string,mixed>> $pool */
@@ -261,11 +292,15 @@ final class RunService
         }
 
         if ($pool !== []) {
-            $capacity = array_sum($this->accountCreateBudget($pool));
+            $limit = $this->createsPerAccountDay($provider);
+            if ($limit <= 0) {
+                return;
+            }
+            $capacity = array_sum($this->accountCreateBudget($pool, $provider));
             if ($count > $capacity) {
                 throw new \RuntimeException(
                     "Дневной лимит: {$capacity} create осталось (по "
-                    . self::CREATES_PER_ACCOUNT_DAY . " на аккаунт × " . count($pool) . ')'
+                    . $limit . " на аккаунт × " . count($pool) . ')'
                 );
             }
             return;
