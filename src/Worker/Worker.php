@@ -503,7 +503,7 @@ final class Worker
         $clockSkew = $dbServerTs > 0 && $dbServerTs > $now + 60;
 
         fwrite(STDOUT, sprintf(
-            "run #%d: bs5 age=%ds fail_ticks=%d skew=%s server_created_at=%s php_now=%s reboot=%s reinstall=%s serverId=%s\n",
+            "run #%d: bs5 age=%ds fail_ticks=%d skew=%s server_created_at=%s php_now=%s reboot=%s reinstall=%s os_reinstall=%s serverId=%s\n",
             $id,
             $age,
             (int) $meta['bootstrap_fail_ticks'],
@@ -512,6 +512,7 @@ final class Worker
             date('Y-m-d H:i:s', $now),
             !empty($meta['probe_reboot']) ? '1' : '0',
             !empty($meta['probe_reinstall']) ? '1' : '0',
+            !empty($meta['probe_os_reinstall']) ? '1' : '0',
             $serverId !== '' ? $serverId : '-'
         ));
         FileLog::write('probe', 'bootstrap:tick', [
@@ -525,6 +526,7 @@ final class Worker
             'php_now' => date('c', $now),
             'probe_reboot' => !empty($meta['probe_reboot']),
             'probe_reinstall' => !empty($meta['probe_reinstall']),
+            'probe_os_reinstall' => !empty($meta['probe_os_reinstall']),
             'server_id' => $serverId,
         ]);
 
@@ -669,25 +671,34 @@ final class Worker
             }
         }
 
-        // После reinstall всё ещё тишина — destroy
+        // После reinstall скрипта всё ещё тишина — одна переустановка ОС/VM, иначе destroy
         if ($ageSinceReinstall !== null && $ageSinceReinstall > $waitAfterReinstallSec) {
             $run['ipv4'] = $ipv4;
-            FileLog::write('probe', 'bootstrap:timeout_after_reinstall', [
+            $pingSum = is_array($meta['last_ping'] ?? null)
+                ? (string) ($meta['last_ping']['summary'] ?? '')
+                : '';
+            $reason = "bootstrap timeout после reinstall ({$ageSinceReinstall}s)"
+                . ($pingSum !== '' ? "; ping {$pingSum}" : '')
+                . ': probe не отвечает';
+            if (empty($meta['probe_os_reinstall'])) {
+                FileLog::write('probe', 'bootstrap:os_reinstall', [
+                    'run_id' => $id,
+                    'ipv4' => $ipv4,
+                    'age_s' => $age,
+                    'age_since_reinstall_s' => $ageSinceReinstall,
+                    'last_ping' => $meta['last_ping'] ?? null,
+                ]);
+                $this->reprovisionOsAfterBootstrapFail($run, $meta, $reason);
+                return;
+            }
+            FileLog::write('probe', 'bootstrap:timeout_after_os_reinstall', [
                 'run_id' => $id,
                 'ipv4' => $ipv4,
                 'age_s' => $age,
                 'age_since_reinstall_s' => $ageSinceReinstall,
                 'last_ping' => $meta['last_ping'] ?? null,
             ]);
-            $pingSum = is_array($meta['last_ping'] ?? null)
-                ? (string) ($meta['last_ping']['summary'] ?? '')
-                : '';
-            $this->failControl(
-                $run,
-                "bootstrap timeout после reinstall ({$ageSinceReinstall}s)"
-                . ($pingSum !== '' ? "; ping {$pingSum}" : '')
-                . ': probe не отвечает'
-            );
+            $this->failControl($run, $reason . ' (после переустановки ОС)');
             return;
         }
 
@@ -889,8 +900,89 @@ final class Worker
 
         if ($ageSinceReinstall !== null && $ageSinceReinstall > $waitAfterReinstallSec) {
             $run['ipv4'] = $ipv4;
-            $this->failControl($run, "bootstrap timeout после reinstall: {$err}");
+            $reason = "bootstrap timeout после reinstall: {$err}";
+            if (empty($meta['probe_os_reinstall'])) {
+                $this->reprovisionOsAfterBootstrapFail($run, $meta, $reason);
+                return;
+            }
+            $this->failControl($run, $reason . ' (после переустановки ОС)');
         }
+    }
+
+    /**
+     * Одна попытка: удалить текущую VM и заново создать (переустановка системы + повторный прогон).
+     *
+     * @param array<string, mixed> $run
+     * @param array<string, mixed> $meta
+     */
+    private function reprovisionOsAfterBootstrapFail(array $run, array $meta, string $reason): void
+    {
+        $id = (int) $run['id'];
+        $serverId = (string) ($run['provider_server_id'] ?? '');
+        $ipv4 = (string) ($run['ipv4'] ?? '');
+
+        FileLog::write('probe', 'bootstrap:os_reinstall_start', [
+            'run_id' => $id,
+            'ipv4' => $ipv4,
+            'server_id' => $serverId,
+            'reason' => $reason,
+            'provider' => (string) ($run['provider'] ?? ''),
+        ]);
+
+        if ($serverId !== '') {
+            try {
+                $provider = ProviderFactory::forRun($run);
+                $provider->destroy($serverId);
+                fwrite(STDOUT, "run #{$id}: destroyed {$serverId} for OS reinstall\n");
+                FileLog::write('probe', 'bootstrap:os_reinstall_destroyed', [
+                    'run_id' => $id,
+                    'server_id' => $serverId,
+                ]);
+            } catch (\Throwable $e) {
+                fwrite(STDERR, "run #{$id}: OS reinstall destroy failed: " . $e->getMessage() . "\n");
+                FileLog::write('probe', 'bootstrap:os_reinstall_destroy_error', [
+                    'run_id' => $id,
+                    'server_id' => $serverId,
+                    'error' => $e->getMessage(),
+                ]);
+                // всё равно идём на recreate — иначе застрянем
+            }
+        }
+
+        $newMeta = [
+            'probe_os_reinstall' => 1,
+            'probe_os_reinstall_at' => time(),
+            'probe_os_reinstall_reason' => mb_substr($reason, 0, 300),
+            'probe_os_reinstall_prev_ip' => $ipv4 !== '' ? $ipv4 : null,
+            'probe_os_reinstall_prev_server' => $serverId !== '' ? $serverId : null,
+        ];
+        $this->saveMeta($id, $newMeta);
+
+        $this->pdo->prepare(
+            "UPDATE runs SET
+                provider_server_id = NULL,
+                ipv4 = NULL,
+                asn = NULL,
+                asn_org = NULL,
+                server_created_at = NULL,
+                destroyed_at = NULL,
+                control_ok = NULL,
+                state = 'ORDERING',
+                verdict = NULL,
+                error_message = ?,
+                updated_at = NOW()
+             WHERE id = ?"
+        )->execute([
+            mb_substr('переустановка ОС/VM после неудачного bootstrap — создаю новый сервер', 0, 500),
+            $id,
+        ]);
+
+        $this->tg->send(
+            "wlsearch: переустановка ОС run #{$id}"
+            . ($ipv4 !== '' ? " ip={$ipv4}" : '')
+            . " — старый сервер удалён, повторный create"
+        );
+        fwrite(STDOUT, "run #{$id}: OS reinstall → ORDERING (повторный create)\n");
     }
 
     /**
