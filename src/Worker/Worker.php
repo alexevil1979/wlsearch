@@ -152,6 +152,17 @@ final class Worker
             return;
         }
 
+        // Атомарно забираем ORDERING → иначе два worker/cron создают две VM на один run
+        $claim = $this->pdo->prepare(
+            "UPDATE runs SET state = 'PROVISIONING', updated_at = NOW()
+             WHERE id = ? AND state = 'ORDERING'"
+        );
+        $claim->execute([$id]);
+        if ($claim->rowCount() === 0) {
+            return;
+        }
+        $run['state'] = 'PROVISIONING';
+
         // На том же аккаунте ещё висит PASS/KEEP — burn не даст второму create
         $accountId = isset($run['provider_account_id']) ? (int) $run['provider_account_id'] : 0;
         if ($accountId > 0 && (string) $run['provider'] === 'timeweb') {
@@ -294,9 +305,13 @@ final class Worker
     private function handleProvisioning(array $run): void
     {
         $id = (int) $run['id'];
-        $serverId = (string) $run['provider_server_id'];
+        $serverId = (string) ($run['provider_server_id'] ?? '');
         if ($serverId === '') {
-            $this->failRun($id, 'ERROR', 'missing provider_server_id');
+            // ORDERING уже захвачен под create; ждём пока create допишет server_id
+            $updated = strtotime((string) ($run['updated_at'] ?? '')) ?: 0;
+            if ($updated > 0 && (time() - $updated) > 600) {
+                $this->failRun($id, 'ERROR', 'create stalled: нет provider_server_id >10 мин');
+            }
             return;
         }
 
