@@ -57,6 +57,15 @@ final class Worker
 
     public function tick(): int
     {
+        try {
+            $n = (new \Wlsearch\Database\Migrator())->migrateQuiet();
+            if ($n > 0) {
+                fwrite(STDOUT, "auto-migrated {$n} schema change(s)\n");
+            }
+        } catch (\Throwable $e) {
+            fwrite(STDERR, 'auto-migrate: ' . $e->getMessage() . "\n");
+        }
+
         $expired = $this->tasks->expireStale();
         if ($expired > 0) {
             fwrite(STDOUT, "expired BS tasks: {$expired}\n");

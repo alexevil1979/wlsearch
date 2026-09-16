@@ -59,7 +59,8 @@ TXT;
 
     private function migrate(): int
     {
-        return (new Migrator())->migrate();
+        (new Migrator())->migrate();
+        return 0;
     }
 
     private function health(): int

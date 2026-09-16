@@ -24,6 +24,12 @@ final class Kernel
     {
         AuthService::startSession();
 
+        try {
+            (new \Wlsearch\Database\Migrator())->migrateQuiet();
+        } catch (\Throwable) {
+            // DB may be down; controllers handle their own errors
+        }
+
         $router = new Router();
         $this->registerRoutes($router);
 

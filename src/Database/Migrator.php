@@ -22,6 +22,17 @@ final class Migrator
 
     public function migrate(): int
     {
+        return $this->apply(true);
+    }
+
+    /** Apply pending migrations without stdout (safe for web/worker). */
+    public function migrateQuiet(): int
+    {
+        return $this->apply(false);
+    }
+
+    private function apply(bool $verbose): int
+    {
         $pdo = Database::pdo();
         $this->ensureMigrationsTable($pdo);
 
@@ -48,7 +59,9 @@ final class Migrator
                     'INSERT INTO schema_migrations (version, applied_at) VALUES (?, NOW())'
                 );
                 $stmt->execute([$version]);
-                fwrite(STDOUT, "Migrated: {$version}\n");
+                if ($verbose) {
+                    fwrite(STDOUT, "Migrated: {$version}\n");
+                }
                 $count++;
             } catch (\Throwable $e) {
                 throw new \RuntimeException(
@@ -59,13 +72,15 @@ final class Migrator
             }
         }
 
-        if ($count === 0) {
-            fwrite(STDOUT, "Nothing to migrate.\n");
-        } else {
-            fwrite(STDOUT, "Done. Applied {$count} migration(s).\n");
+        if ($verbose) {
+            if ($count === 0) {
+                fwrite(STDOUT, "Nothing to migrate.\n");
+            } else {
+                fwrite(STDOUT, "Done. Applied {$count} migration(s).\n");
+            }
         }
 
-        return 0;
+        return $count;
     }
 
     private function ensureMigrationsTable(PDO $pdo): void
