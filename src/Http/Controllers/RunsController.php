@@ -23,6 +23,7 @@ final class RunsController
             'title' => 'Runs',
             'user' => AuthService::user(),
             'runs' => $service->listRecent(150),
+            'liveRun' => $service->currentLiveRun(),
             'flash' => Flash::pull(),
             'csrf' => Csrf::field(),
             'nav' => 'runs',

@@ -309,6 +309,24 @@ td code {
 .page-head h1 { margin: 0; }
 .page-head .muted { margin: 0.25rem 0 0; max-width: 52rem; }
 
+.run-live-pin {
+  border: 1px solid var(--warn);
+  box-shadow: 0 0 0 1px rgba(201, 162, 39, 0.25), 0 8px 24px rgba(0, 0, 0, 0.35);
+  background: linear-gradient(180deg, rgba(201, 162, 39, 0.12) 0%, var(--bg2) 55%);
+  margin-bottom: 1rem;
+}
+.run-live-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 0.55rem;
+}
+.run-live-row td {
+  background: rgba(201, 162, 39, 0.08);
+}
+
 @media (max-width: 900px) {
   .wrap { padding: 0.85rem; }
   .topbar { padding: 0.55rem 0.85rem; }

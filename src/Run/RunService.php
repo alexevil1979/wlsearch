@@ -556,6 +556,24 @@ final class RunService
         return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
     }
 
+    /**
+     * Текущий живой run (в работе), не очередь ORDERING.
+     * @return array<string, mixed>|null
+     */
+    public function currentLiveRun(): ?array
+    {
+        $stmt = $this->pdo->query(
+            "SELECT r.*, a.name AS account_name
+             FROM runs r
+             LEFT JOIN provider_accounts a ON a.id = r.provider_account_id
+             WHERE r.state IN ('PROVISIONING','BOOTSTRAPPING','CONTROL_CHECK','BS_CHECK','DESTROYING')
+             ORDER BY r.id ASC
+             LIMIT 1"
+        );
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        return is_array($row) ? $row : null;
+    }
+
     public function updateState(int $id, string $state, ?string $verdict, ?string $error): void
     {
         $stmt = $this->pdo->prepare(

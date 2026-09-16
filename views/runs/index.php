@@ -1,13 +1,16 @@
 <?php
 /** @var list<array<string,mixed>> $runs */
+/** @var array<string,mixed>|null $liveRun */
 /** @var string $csrf */
 use Wlsearch\Support\View;
+
+$liveRun = $liveRun ?? null;
 
 $badgeClass = static function (string $state): string {
     return match ($state) {
         'PASS', 'KEEP' => 'badge-ok',
         'FAIL_BS', 'FAIL_CONTROL', 'ERROR', 'DESTROYED' => 'badge-err',
-        'BS_CHECK', 'CONTROL_CHECK', 'BOOTSTRAPPING', 'ORDERING' => 'badge-warn',
+        'BS_CHECK', 'CONTROL_CHECK', 'BOOTSTRAPPING', 'ORDERING', 'PROVISIONING', 'DESTROYING' => 'badge-warn',
         'SKIPPED' => '',
         default => '',
     };
@@ -19,80 +22,43 @@ $fmtDt = static function (?string $dt): string {
     $t = strtotime($dt);
     return $t !== false ? date('d.m.Y H:i', $t) : $dt;
 };
-?>
-<div class="page-head">
-    <div>
-        <h1>Runs</h1>
-        <p class="muted">ORDERING → … → CONTROL_CHECK → BS_CHECK. Destroy при FAIL (если не keep).</p>
-    </div>
-    <a class="btn" href="/runs/new">Запустить прогон</a>
-</div>
 
-<div class="card" style="display:flex;flex-wrap:wrap;gap:0.75rem;align-items:center;justify-content:space-between;padding:0.85rem 1rem">
-    <p class="muted" style="margin:0">Остановить ORDERING (SKIPPED). Живые в работе → KEEP, без destroy. PASS/KEEP не трогает.</p>
-    <form method="post" action="/runs/stop-queue" style="margin:0"
-          onsubmit="return confirm('Остановить очередь?\nORDERING → SKIPPED\nВ работе → KEEP (VPS не удаляем)\nPASS/KEEP без изменений')">
-        <?= $csrf ?>
-        <button class="btn btn-danger" type="submit" style="min-width:12rem">Остановить очередь</button>
-    </form>
-</div>
-
-<div class="card table-wrap">
-    <?php if ($runs === []): ?>
-        <p class="muted" style="margin:0">Пока нет прогонов.</p>
-    <?php else: ?>
-        <table class="data">
-            <thead>
-            <tr>
-                <th>ID</th>
-                <th>State</th>
-                <th>Cloud</th>
-                <th>IP</th>
-                <th>ASN</th>
-                <th>ctrl/bs</th>
-                <th>Создан</th>
-                <th>Тест</th>
-                <th>Ошибка</th>
-                <th></th>
-            </tr>
-            </thead>
-            <tbody>
-            <?php foreach ($runs as $r): ?>
-                <?php
-                $id = (int) $r['id'];
-                $state = (string) $r['state'];
-                $canDestroy = !in_array($state, ['DESTROYED', 'DESTROYING'], true) && !empty($r['provider_server_id']);
-                $canKeep = !in_array($state, ['DESTROYED', 'KEEP'], true);
-                $canRetryControl = in_array($state, ['FAIL_CONTROL', 'BS_CHECK', 'CONTROL_CHECK', 'PASS', 'FAIL_BS', 'KEEP', 'BOOTSTRAPPING'], true) && !empty($r['ipv4']);
-                $canRetryBs = !empty($r['ipv4'])
-                    && !in_array($state, ['DESTROYED', 'DESTROYING', 'ORDERING', 'PROVISIONING'], true);
-                $probeHint = '';
-                if (in_array($state, ['BOOTSTRAPPING', 'CONTROL_CHECK'], true) && !empty($r['ipv4'])) {
-                    $probeHint = \Wlsearch\Probe\CloudInitBuilder::oneLiner(
-                        (string) ($r['provider'] ?? 'timeweb'),
-                        $id
-                    );
-                }
-                $accLabel = '';
-                if (!empty($r['account_name'])) {
-                    $accLabel = '#' . (int) ($r['provider_account_id'] ?? 0) . ' ' . (string) $r['account_name'];
-                } elseif (!empty($r['provider_account_id'])) {
-                    $accLabel = '#' . (int) $r['provider_account_id'];
-                }
-                $ctrl = $r['control_ok'] === null ? '—' : ((int) $r['control_ok'] ? '✓' : '✗');
-                $bs = $r['bs_ok'] === null ? '—' : ((int) $r['bs_ok'] ? '✓' : '✗');
-                $created = $fmtDt(isset($r['created_at']) ? (string) $r['created_at'] : null);
-                $testedRaw = $r['tested_at'] ?? null;
-                if (($testedRaw === null || $testedRaw === '')
-                    && ($r['bs_ok'] !== null || $r['control_ok'] !== null)
-                    && in_array($state, ['PASS', 'FAIL_BS', 'FAIL_CONTROL', 'KEEP', 'DESTROYED', 'ERROR'], true)
-                ) {
-                    $testedRaw = $r['updated_at'] ?? null;
-                }
-                $tested = $fmtDt($testedRaw !== null && $testedRaw !== '' ? (string) $testedRaw : null);
-                $err = (string) ($r['error_message'] ?? '');
-                ?>
-                <tr>
+$renderRunRows = static function (array $r, string $csrf, callable $badgeClass, callable $fmtDt, bool $highlight = false): void {
+    $id = (int) $r['id'];
+    $state = (string) $r['state'];
+    $canDestroy = !in_array($state, ['DESTROYED', 'DESTROYING'], true) && !empty($r['provider_server_id']);
+    $canKeep = !in_array($state, ['DESTROYED', 'KEEP'], true);
+    $canRetryControl = in_array($state, ['FAIL_CONTROL', 'BS_CHECK', 'CONTROL_CHECK', 'PASS', 'FAIL_BS', 'KEEP', 'BOOTSTRAPPING'], true) && !empty($r['ipv4']);
+    $canRetryBs = !empty($r['ipv4'])
+        && !in_array($state, ['DESTROYED', 'DESTROYING', 'ORDERING', 'PROVISIONING'], true);
+    $probeHint = '';
+    if (in_array($state, ['BOOTSTRAPPING', 'CONTROL_CHECK'], true) && !empty($r['ipv4'])) {
+        $probeHint = \Wlsearch\Probe\CloudInitBuilder::oneLiner(
+            (string) ($r['provider'] ?? 'timeweb'),
+            $id
+        );
+    }
+    $accLabel = '';
+    if (!empty($r['account_name'])) {
+        $accLabel = '#' . (int) ($r['provider_account_id'] ?? 0) . ' ' . (string) $r['account_name'];
+    } elseif (!empty($r['provider_account_id'])) {
+        $accLabel = '#' . (int) $r['provider_account_id'];
+    }
+    $ctrl = $r['control_ok'] === null ? '—' : ((int) $r['control_ok'] ? '✓' : '✗');
+    $bs = $r['bs_ok'] === null ? '—' : ((int) $r['bs_ok'] ? '✓' : '✗');
+    $created = $fmtDt(isset($r['created_at']) ? (string) $r['created_at'] : null);
+    $testedRaw = $r['tested_at'] ?? null;
+    if (($testedRaw === null || $testedRaw === '')
+        && ($r['bs_ok'] !== null || $r['control_ok'] !== null)
+        && in_array($state, ['PASS', 'FAIL_BS', 'FAIL_CONTROL', 'KEEP', 'DESTROYED', 'ERROR'], true)
+    ) {
+        $testedRaw = $r['updated_at'] ?? null;
+    }
+    $tested = $fmtDt($testedRaw !== null && $testedRaw !== '' ? (string) $testedRaw : null);
+    $err = (string) ($r['error_message'] ?? '');
+    $trClass = $highlight ? 'run-live-row' : '';
+    ?>
+                <tr class="<?= View::e($trClass) ?>"<?= $highlight ? ' id="live-run-dup"' : '' ?>>
                     <td class="cell-narrow">#<?= $id ?></td>
                     <td class="cell-narrow">
                         <div class="cell-stack">
@@ -154,7 +120,7 @@ $fmtDt = static function (?string $dt): string {
                     </td>
                 </tr>
                 <?php if ($probeHint !== ''): ?>
-                <tr>
+                <tr class="<?= View::e($trClass) ?>">
                     <td colspan="10" style="padding-top:0">
                         <details>
                             <summary class="muted" style="cursor:pointer;font-size:0.85rem">
@@ -165,8 +131,94 @@ $fmtDt = static function (?string $dt): string {
                     </td>
                 </tr>
                 <?php endif; ?>
+    <?php
+};
+?>
+<div class="page-head">
+    <div>
+        <h1>Runs</h1>
+        <p class="muted">ORDERING → … → CONTROL_CHECK → BS_CHECK. Destroy при FAIL (если не keep).</p>
+    </div>
+    <a class="btn" href="/runs/new">Запустить прогон</a>
+</div>
+
+<div class="card" style="display:flex;flex-wrap:wrap;gap:0.75rem;align-items:center;justify-content:space-between;padding:0.85rem 1rem">
+    <p class="muted" style="margin:0">Остановить ORDERING (SKIPPED). Живые в работе → KEEP, без destroy. PASS/KEEP не трогает.</p>
+    <form method="post" action="/runs/stop-queue" style="margin:0"
+          onsubmit="return confirm('Остановить очередь?\nORDERING → SKIPPED\nВ работе → KEEP (VPS не удаляем)\nPASS/KEEP без изменений')">
+        <?= $csrf ?>
+        <button class="btn btn-danger" type="submit" style="min-width:12rem">Остановить очередь</button>
+    </form>
+</div>
+
+<?php if ($liveRun !== null): ?>
+<div class="card run-live-pin" id="live-run">
+    <div class="run-live-head">
+        <strong>Сейчас в работе</strong>
+        <span class="muted" style="font-size:0.8rem">дубль · автообновление ~3с</span>
+    </div>
+    <div class="table-wrap" style="margin:0">
+        <table class="data">
+            <thead>
+            <tr>
+                <th>ID</th>
+                <th>State</th>
+                <th>Cloud</th>
+                <th>IP</th>
+                <th>ASN</th>
+                <th>ctrl/bs</th>
+                <th>Создан</th>
+                <th>Тест</th>
+                <th>Ошибка</th>
+                <th></th>
+            </tr>
+            </thead>
+            <tbody>
+            <?php $renderRunRows($liveRun, $csrf, $badgeClass, $fmtDt, true); ?>
+            </tbody>
+        </table>
+    </div>
+</div>
+<?php endif; ?>
+
+<div class="card table-wrap">
+    <?php if ($runs === []): ?>
+        <p class="muted" style="margin:0">Пока нет прогонов.</p>
+    <?php else: ?>
+        <table class="data">
+            <thead>
+            <tr>
+                <th>ID</th>
+                <th>State</th>
+                <th>Cloud</th>
+                <th>IP</th>
+                <th>ASN</th>
+                <th>ctrl/bs</th>
+                <th>Создан</th>
+                <th>Тест</th>
+                <th>Ошибка</th>
+                <th></th>
+            </tr>
+            </thead>
+            <tbody>
+            <?php foreach ($runs as $r): ?>
+                <?php $renderRunRows($r, $csrf, $badgeClass, $fmtDt, false); ?>
             <?php endforeach; ?>
             </tbody>
         </table>
     <?php endif; ?>
 </div>
+
+<script>
+(function () {
+    var live = <?= $liveRun !== null ? 'true' : 'false' ?>;
+    var ms = live ? 3000 : 20000;
+    setTimeout(function () {
+        if (document.hidden) {
+            setTimeout(arguments.callee, ms);
+            return;
+        }
+        window.location.reload();
+    }, ms);
+})();
+</script>
