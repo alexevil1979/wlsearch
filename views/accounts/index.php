@@ -218,7 +218,10 @@ foreach ($byProvider as $list) {
 
         <div id="yc-fields" style="display:<?= $p === 'yandex' ? 'block' : 'none' ?>">
             <h3>Yandex Cloud</h3>
-            <p class="muted">Сервисный аккаунт → ключ (authorized key JSON) + folder + subnet. Публичный IPv4 через one-to-one NAT.</p>
+            <p class="muted">
+                Сервисный аккаунт → ключ (authorized key JSON) + <strong>Folder ID</strong> (не Cloud ID) + subnet.
+                Публичный IPv4 через one-to-one NAT — роли SA на folder: <code>compute.editor</code> + <code>vpc.publicAdmin</code> (или <code>editor</code>).
+            </p>
             <div class="form-grid">
             <div class="span-2">
             <label for="YANDEX_SA_KEY_JSON">SA key JSON <?= $editRow ? '(пусто = не менять)' : '' ?></label>

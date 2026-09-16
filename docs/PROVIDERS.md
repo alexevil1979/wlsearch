@@ -16,7 +16,12 @@
 - Логи: `storage/logs/yandex.log`
 - Docs: https://yandex.cloud/docs/compute/api-ref/Instance/create
 
-Права SA минимум: `compute.editor` (+ `vpc.user` на сеть/subnet) в folder.
+Права SA **на folder** (не на cloud):
+- `compute.editor`
+- `vpc.publicAdmin` (нужно для one-to-one NAT / публичный IPv4; одного `vpc.user` мало)
+- либо сразу примитив `editor` на folder
+
+Частая ошибка 403 `Permission denied to resource-manager.folder`: в `YANDEX_FOLDER_ID` попал **Cloud ID** вместо **Folder ID**, либо роли выданы другому SA / не на тот каталог.
 
 ## Timeweb Cloud (на паузе)
 
