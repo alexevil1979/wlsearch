@@ -132,7 +132,7 @@ final class RunsController
         $actor = (string) (AuthService::user()['login'] ?? 'admin');
         try {
             $r = (new RunService())->stopAllQueued($actor);
-            Flash::set('ok', "Очередь остановлена: SKIPPED={$r['skipped']}, destroy={$r['destroying']}.");
+            Flash::set('ok', "Очередь остановлена: SKIPPED={$r['skipped']}, в работе → KEEP={$r['kept']} (без destroy).");
         } catch (\Throwable $e) {
             Flash::set('error', $e->getMessage());
         }

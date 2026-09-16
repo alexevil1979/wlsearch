@@ -29,9 +29,9 @@ $fmtDt = static function (?string $dt): string {
 </div>
 
 <div class="card" style="display:flex;flex-wrap:wrap;gap:0.75rem;align-items:center;justify-content:space-between;padding:0.85rem 1rem">
-    <p class="muted" style="margin:0">Остановить все ORDERING и destroy живых VPS (PASS/KEEP не трогает).</p>
+    <p class="muted" style="margin:0">Остановить ORDERING (SKIPPED). Живые в работе → KEEP, без destroy. PASS/KEEP не трогает.</p>
     <form method="post" action="/runs/stop-queue" style="margin:0"
-          onsubmit="return confirm('Остановить всю очередь?\nORDERING → SKIPPED\nЖивые VPS → destroy\n(PASS/KEEP останутся)')">
+          onsubmit="return confirm('Остановить очередь?\nORDERING → SKIPPED\nВ работе → KEEP (VPS не удаляем)\nPASS/KEEP без изменений')">
         <?= $csrf ?>
         <button class="btn btn-danger" type="submit" style="min-width:12rem">Остановить очередь</button>
     </form>
