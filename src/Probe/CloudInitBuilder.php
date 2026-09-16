@@ -31,6 +31,20 @@ final class CloudInitBuilder
         return self::forRun($provider, $runId);
     }
 
+    /**
+     * Повторная установка probe после reboot: #cloud-config + bootcmd
+     * (bootcmd выполняется на каждом буте — после updateMetadata + restart).
+     */
+    public static function forRerun(string $provider, int $runId): string
+    {
+        $runId = (int) $runId;
+        $b64 = base64_encode(self::normalizeLf(self::installScriptBody($provider, $runId)));
+        return "#cloud-config\n"
+            . "# wlsearch probe reinstall run_{$runId}\n"
+            . "bootcmd:\n"
+            . "  - [ bash, -c, \"echo {$b64} | base64 -d | bash\" ]\n";
+    }
+
     private static function normalizeLf(string $s): string
     {
         return str_replace(["\r\n", "\r"], "\n", $s);

@@ -22,12 +22,32 @@ final class RunsController
         $live = $service->currentLiveRun();
         $liveProbeLog = '';
         $liveProbeMeta = '';
+        $livePingStatus = '';
         if ($live !== null) {
             $rid = (int) $live['id'];
             $liveProbeLog = \Wlsearch\Support\FileLog::tail('probe', 80, '"run_id":' . $rid);
             $meta = json_decode((string) ($live['provider_meta'] ?? ''), true);
-            if (is_array($meta) && !empty($meta['last_probe'])) {
-                $liveProbeMeta = (string) json_encode($meta['last_probe'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT);
+            if (is_array($meta)) {
+                if (!empty($meta['last_ping']) && is_array($meta['last_ping'])) {
+                    $p = $meta['last_ping'];
+                    $livePingStatus = (string) ($p['summary'] ?? json_encode($p, JSON_UNESCAPED_UNICODE));
+                    if (!empty($p['at'])) {
+                        $livePingStatus .= ' @ ' . (string) $p['at'];
+                    }
+                }
+                $bits = [];
+                if (!empty($meta['last_ping'])) {
+                    $bits['last_ping'] = $meta['last_ping'];
+                }
+                if (!empty($meta['last_probe'])) {
+                    $bits['last_probe'] = $meta['last_probe'];
+                }
+                if ($bits !== []) {
+                    $liveProbeMeta = (string) json_encode(
+                        $bits,
+                        JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT
+                    );
+                }
             }
         }
         View::render('runs/index', [
@@ -37,6 +57,7 @@ final class RunsController
             'liveRun' => $live,
             'liveProbeLog' => $liveProbeLog,
             'liveProbeMeta' => $liveProbeMeta,
+            'livePingStatus' => $livePingStatus,
             'flash' => Flash::pull(),
             'csrf' => Csrf::field(),
             'nav' => 'runs',

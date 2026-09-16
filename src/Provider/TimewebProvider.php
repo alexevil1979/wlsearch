@@ -942,11 +942,17 @@ final class TimewebProvider implements ProviderInterface
                 'Timeweb PATCH cloud_init HTTP ' . $patch['status'] . ': ' . mb_substr($patch['body'], 0, 400)
             );
         }
+        $this->rebootInstance($serverId);
+    }
+
+    public function rebootInstance(string $serverId): void
+    {
+        FileLog::write('timeweb', 'reboot:start', ['server_id' => $serverId]);
         $reboot = $this->http->request(
             'POST',
             $this->base . '/servers/' . rawurlencode($serverId) . '/reboot'
         );
-        FileLog::write('timeweb', 'cloud_init:repush_reboot', [
+        FileLog::write('timeweb', 'reboot:done', [
             'http' => $reboot['status'],
             'body' => mb_substr($reboot['body'], 0, 400),
         ]);

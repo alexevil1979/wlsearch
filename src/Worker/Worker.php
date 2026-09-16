@@ -476,13 +476,17 @@ final class Worker
         $timeout = Settings::int('BOOTSTRAP_TIMEOUT_SEC', Env::int('BOOTSTRAP_TIMEOUT_SEC', 600));
         $rebootAfterSec = 60;
         $rebootAfterTicks = 2; // ~2 тика worker без probe → reboot (независимо от TZ)
-        $waitAfterRebootSec = min(300, max(120, (int) ($timeout / 2)));
+        $waitAfterRebootSec = 90; // 1.5 мин пауза → ping → reinstall bootstrap
+        $waitAfterReinstallSec = min(300, max(120, (int) ($timeout / 2)));
+
+        $reinstallAt = isset($meta['probe_reinstall_at']) ? (int) $meta['probe_reinstall_at'] : 0;
+        $ageSinceReinstall = $reinstallAt > 0 ? max(0, $now - $reinstallAt) : null;
 
         $dbServerTs = strtotime((string) ($run['server_created_at'] ?? '')) ?: 0;
         $clockSkew = $dbServerTs > 0 && $dbServerTs > $now + 60;
 
         fwrite(STDOUT, sprintf(
-            "run #%d: bs5 age=%ds fail_ticks=%d skew=%s server_created_at=%s php_now=%s reboot=%s serverId=%s\n",
+            "run #%d: bs5 age=%ds fail_ticks=%d skew=%s server_created_at=%s php_now=%s reboot=%s reinstall=%s serverId=%s\n",
             $id,
             $age,
             (int) $meta['bootstrap_fail_ticks'],
@@ -490,6 +494,7 @@ final class Worker
             (string) ($run['server_created_at'] ?? '-'),
             date('Y-m-d H:i:s', $now),
             !empty($meta['probe_reboot']) ? '1' : '0',
+            !empty($meta['probe_reinstall']) ? '1' : '0',
             $serverId !== '' ? $serverId : '-'
         ));
         FileLog::write('probe', 'bootstrap:tick', [
@@ -502,6 +507,7 @@ final class Worker
             'server_created_at' => (string) ($run['server_created_at'] ?? ''),
             'php_now' => date('c', $now),
             'probe_reboot' => !empty($meta['probe_reboot']),
+            'probe_reinstall' => !empty($meta['probe_reinstall']),
             'server_id' => $serverId,
         ]);
 
@@ -509,29 +515,12 @@ final class Worker
             && empty($meta['probe_reboot'])
             && ($age >= $rebootAfterSec || (int) $meta['bootstrap_fail_ticks'] >= $rebootAfterTicks);
 
-        // Сначала reboot, если уже долго нет probe (до цикла попыток)
+        // Сначала только reboot; bootstrap переустановим после паузы + ping
         if ($shouldReboot) {
             try {
                 $provider = ProviderFactory::forRun($run);
-                $didReboot = false;
-                if (
-                    (string) ($run['provider'] ?? '') === 'timeweb'
-                    && empty($meta['probe_repush'])
-                    && method_exists($provider, 'repushCloudInitAndReboot')
-                ) {
-                    $script = CloudInitBuilder::forRun((string) $run['provider'], $id);
-                    /** @var \Wlsearch\Provider\TimewebProvider $provider */
-                    $provider->repushCloudInitAndReboot($serverId, $script);
-                    $meta['probe_repush'] = 1;
-                    $meta['probe_repush_at'] = date('c');
-                    $didReboot = true;
-                    fwrite(STDOUT, "run #{$id}: repush cloud_init + reboot (age={$age}s ticks={$meta['bootstrap_fail_ticks']})\n");
-                } elseif (method_exists($provider, 'rebootInstance')) {
+                if (method_exists($provider, 'rebootInstance')) {
                     $provider->rebootInstance($serverId);
-                    $didReboot = true;
-                    fwrite(STDOUT, "run #{$id}: reboot after probe hang (age={$age}s ticks={$meta['bootstrap_fail_ticks']})\n");
-                }
-                if ($didReboot) {
                     $meta['probe_reboot'] = 1;
                     $meta['probe_reboot_at'] = time();
                     $meta['bootstrap_fail_ticks'] = 0;
@@ -540,7 +529,7 @@ final class Worker
                         'UPDATE runs SET error_message = ? WHERE id = ?'
                     )->execute([
                         mb_substr(
-                            "bs5 reboot (age={$age}s) — жду ещё ~{$waitAfterRebootSec}s",
+                            "bs5 reboot (age={$age}s) — пауза {$waitAfterRebootSec}s → ping → bootstrap",
                             0,
                             500
                         ),
@@ -555,6 +544,7 @@ final class Worker
                         'provider' => (string) ($run['provider'] ?? ''),
                         'clock_skew' => $clockSkew,
                     ]);
+                    fwrite(STDOUT, "run #{$id}: reboot after probe hang (age={$age}s)\n");
                     return;
                 }
             } catch (\Throwable $e) {
@@ -566,18 +556,99 @@ final class Worker
             }
         }
 
-        // Уже был reboot и всё ещё тишина — destroy и очередь дальше
-        if ($ageSinceReboot !== null && $ageSinceReboot > $waitAfterRebootSec) {
+        // После reboot: 1.5 мин → ping в meta/админку → повторная установка bootstrap
+        if (
+            $serverId !== ''
+            && !empty($meta['probe_reboot'])
+            && empty($meta['probe_reinstall'])
+            && $ageSinceReboot !== null
+            && $ageSinceReboot >= $waitAfterRebootSec
+        ) {
+            $ping = $this->pingHost($ipv4);
+            $meta['last_ping'] = $ping;
+            $this->saveMeta($id, $meta);
+            FileLog::write('probe', 'bootstrap:ping', [
+                'run_id' => $id,
+                'ipv4' => $ipv4,
+                'ping' => $ping,
+                'age_since_reboot_s' => $ageSinceReboot,
+            ]);
+            fwrite(STDOUT, "run #{$id}: ping after reboot: {$ping['summary']}\n");
+
+            try {
+                $provider = ProviderFactory::forRun($run);
+                if (method_exists($provider, 'repushCloudInitAndReboot')) {
+                    $provName = (string) ($run['provider'] ?? 'unknown');
+                    $script = $provName === 'yandex'
+                        ? CloudInitBuilder::forRerun($provName, $id)
+                        : CloudInitBuilder::forRun($provName, $id);
+                    $provider->repushCloudInitAndReboot($serverId, $script);
+                    $meta['probe_reinstall'] = 1;
+                    $meta['probe_reinstall_at'] = time();
+                    $meta['probe_repush'] = 1;
+                    $meta['bootstrap_fail_ticks'] = 0;
+                    $this->saveMeta($id, $meta);
+                    $msg = "ping: {$ping['summary']} → reinstall bootstrap, жду probe ~{$waitAfterReinstallSec}s";
+                    $this->pdo->prepare(
+                        'UPDATE runs SET error_message = ? WHERE id = ?'
+                    )->execute([mb_substr($msg, 0, 500), $id]);
+                    FileLog::write('probe', 'bootstrap:reinstall', [
+                        'run_id' => $id,
+                        'ipv4' => $ipv4,
+                        'server_id' => $serverId,
+                        'provider' => (string) ($run['provider'] ?? ''),
+                        'ping' => $ping,
+                    ]);
+                    fwrite(STDOUT, "run #{$id}: {$msg}\n");
+                    return;
+                }
+                $meta['probe_reinstall'] = 1;
+                $meta['probe_reinstall_at'] = time();
+                $meta['probe_reinstall_skip'] = 'no_repush_method';
+                $this->saveMeta($id, $meta);
+                $this->pdo->prepare(
+                    'UPDATE runs SET error_message = ? WHERE id = ?'
+                )->execute([
+                    mb_substr("ping: {$ping['summary']} — нет repush у провайдера, жду probe", 0, 500),
+                    $id,
+                ]);
+            } catch (\Throwable $e) {
+                fwrite(STDERR, "run #{$id}: bootstrap reinstall failed: " . $e->getMessage() . "\n");
+                $meta['probe_reinstall'] = 1;
+                $meta['probe_reinstall_at'] = time();
+                $meta['probe_reinstall_error'] = mb_substr($e->getMessage(), 0, 200);
+                $this->saveMeta($id, $meta);
+                $this->pdo->prepare(
+                    'UPDATE runs SET error_message = ? WHERE id = ?'
+                )->execute([
+                    mb_substr(
+                        "ping: {$ping['summary']}; reinstall fail: " . $e->getMessage(),
+                        0,
+                        500
+                    ),
+                    $id,
+                ]);
+            }
+        }
+
+        // После reinstall всё ещё тишина — destroy
+        if ($ageSinceReinstall !== null && $ageSinceReinstall > $waitAfterReinstallSec) {
             $run['ipv4'] = $ipv4;
-            FileLog::write('probe', 'bootstrap:timeout_after_reboot', [
+            FileLog::write('probe', 'bootstrap:timeout_after_reinstall', [
                 'run_id' => $id,
                 'ipv4' => $ipv4,
                 'age_s' => $age,
-                'age_since_reboot_s' => $ageSinceReboot,
+                'age_since_reinstall_s' => $ageSinceReinstall,
+                'last_ping' => $meta['last_ping'] ?? null,
             ]);
+            $pingSum = is_array($meta['last_ping'] ?? null)
+                ? (string) ($meta['last_ping']['summary'] ?? '')
+                : '';
             $this->failControl(
                 $run,
-                "bootstrap timeout после reboot ({$ageSinceReboot}s): probe не отвечает"
+                "bootstrap timeout после reinstall ({$ageSinceReinstall}s)"
+                . ($pingSum !== '' ? "; ping {$pingSum}" : '')
+                . ': probe не отвечает'
             );
             return;
         }
@@ -656,9 +727,11 @@ final class Worker
             ];
             $this->saveMeta($id, $meta);
 
-            $phase = !empty($meta['probe_reboot'])
-                ? ('после reboot ' . (int) ($ageSinceReboot ?? 0) . 's')
-                : ($ageNow . 's');
+            $phase = !empty($meta['probe_reinstall'])
+                ? ('после reinstall ' . (int) ($ageSinceReinstall ?? 0) . 's')
+                : (!empty($meta['probe_reboot'])
+                    ? ('после reboot ' . (int) ($ageSinceReboot ?? 0) . 's')
+                    : ($ageNow . 's'));
             $waitMsg = sprintf(
                 'bs5 ожидание probe %s (повтор %d/%d): %s',
                 $phase,
@@ -743,7 +816,11 @@ final class Worker
                     $this->pdo->prepare(
                         'UPDATE runs SET error_message = ? WHERE id = ?'
                     )->execute([
-                        mb_substr("bs5 reboot после fail_ticks={$meta['bootstrap_fail_ticks']} — жду снова", 0, 500),
+                        mb_substr(
+                            "bs5 reboot — пауза {$waitAfterRebootSec}s → ping → bootstrap",
+                            0,
+                            500
+                        ),
                         $id,
                     ]);
                     FileLog::write('probe', 'bootstrap:reboot', [
@@ -760,10 +837,82 @@ final class Worker
             }
         }
 
-        if ($ageSinceReboot !== null && $ageSinceReboot > $waitAfterRebootSec) {
+        if ($ageSinceReinstall !== null && $ageSinceReinstall > $waitAfterReinstallSec) {
             $run['ipv4'] = $ipv4;
-            $this->failControl($run, "bootstrap timeout после reboot: {$err}");
+            $this->failControl($run, "bootstrap timeout после reinstall: {$err}");
         }
+    }
+
+    /**
+     * ICMP ping + TCP:80 для статуса в админке после reboot.
+     *
+     * @return array{
+     *   ok: bool,
+     *   icmp_ok: bool,
+     *   tcp80_ok: bool,
+     *   loss_pct: int|null,
+     *   tcp_ms: int,
+     *   summary: string,
+     *   raw: string,
+     *   at: string
+     * }
+     */
+    private function pingHost(string $ipv4): array
+    {
+        $ipv4 = trim($ipv4);
+        if (!filter_var($ipv4, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+            return [
+                'ok' => false,
+                'icmp_ok' => false,
+                'tcp80_ok' => false,
+                'loss_pct' => null,
+                'tcp_ms' => 0,
+                'summary' => 'invalid ip',
+                'raw' => '',
+                'at' => date('c'),
+            ];
+        }
+
+        $out = [];
+        $code = 1;
+        $cmd = 'ping -c 3 -W 2 ' . escapeshellarg($ipv4) . ' 2>&1';
+        @exec($cmd, $out, $code);
+        $raw = implode("\n", $out);
+        $loss = null;
+        if (preg_match('/(\d+)%\s*packet\s*loss/i', $raw, $m)) {
+            $loss = (int) $m[1];
+        }
+        $icmpOk = $code === 0 && ($loss === null || $loss < 100);
+
+        $tcpOk = false;
+        $t0 = microtime(true);
+        $errno = 0;
+        $errstr = '';
+        $fp = @fsockopen($ipv4, 80, $errno, $errstr, 3.0);
+        if (is_resource($fp)) {
+            $tcpOk = true;
+            fclose($fp);
+        }
+        $tcpMs = (int) round((microtime(true) - $t0) * 1000);
+
+        $summary = sprintf(
+            'icmp=%s loss=%s tcp80=%s %dms',
+            $icmpOk ? 'ok' : 'fail',
+            $loss === null ? '?' : ($loss . '%'),
+            $tcpOk ? 'open' : ('closed/' . $errno),
+            $tcpMs
+        );
+
+        return [
+            'ok' => $icmpOk || $tcpOk,
+            'icmp_ok' => $icmpOk,
+            'tcp80_ok' => $tcpOk,
+            'loss_pct' => $loss,
+            'tcp_ms' => $tcpMs,
+            'summary' => $summary,
+            'raw' => mb_substr($raw, 0, 800),
+            'at' => date('c'),
+        ];
     }
 
     /** @param array<string, mixed> $run */

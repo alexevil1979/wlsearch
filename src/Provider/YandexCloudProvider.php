@@ -206,6 +206,34 @@ final class YandexCloudProvider implements ProviderInterface
         FileLog::write('yandex', 'reboot:done', ['instance_id' => $serverId]);
     }
 
+    /**
+     * Перезалить user-data (cloud-init) и restart — повторная установка probe.
+     * bootcmd в #cloud-config подхватится на следующем буте.
+     */
+    public function repushCloudInitAndReboot(string $serverId, string $cloudInit): void
+    {
+        FileLog::write('yandex', 'cloud_init:repush', [
+            'instance_id' => $serverId,
+            'bytes' => strlen($cloudInit),
+            'head' => mb_substr($cloudInit, 0, 40),
+            'account' => $this->cfg->logTag(),
+        ]);
+        $op = $this->api(
+            'POST',
+            'https://compute.api.cloud.yandex.net/compute/v1/instances/'
+            . rawurlencode($serverId) . '/updateMetadata',
+            [
+                'upsert' => [
+                    'user-data' => $cloudInit,
+                    'serial-port-enable' => '1',
+                ],
+            ]
+        );
+        $this->waitOperation($op);
+        FileLog::write('yandex', 'cloud_init:repush_meta_done', ['instance_id' => $serverId]);
+        $this->rebootInstance($serverId);
+    }
+
     /** @param array<string, mixed> $inst */
     private function mapInstance(array $inst): ServerInfo
     {

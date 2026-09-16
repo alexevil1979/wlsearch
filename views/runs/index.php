@@ -165,6 +165,15 @@ $renderRunRows = static function (array $r, string $csrf, callable $badgeClass, 
             <a href="/logs?file=probe&amp;q=<?= View::e(rawurlencode('"run_id":' . (int) $liveRun['id'])) ?>">сырой probe.log</a>
         </span>
     </div>
+    <?php
+    $livePingStatus = $livePingStatus ?? '';
+    if ($livePingStatus !== ''):
+    ?>
+        <p style="margin:0.55rem 0 0;font-size:0.9rem">
+            <strong>Ping:</strong>
+            <code style="font-size:0.85rem"><?= View::e($livePingStatus) ?></code>
+        </p>
+    <?php endif; ?>
     <div class="table-wrap" style="margin:0">
         <table class="data">
             <thead>
@@ -195,7 +204,7 @@ $renderRunRows = static function (array $r, string $csrf, callable $badgeClass, 
         <details open style="margin-top:0.75rem">
             <summary class="muted" style="cursor:pointer;font-size:0.85rem">Сырые логи probe (curl timings / body)</summary>
             <?php if ($liveProbeMeta !== ''): ?>
-                <p class="muted" style="margin:0.4rem 0 0.2rem;font-size:0.78rem">last_probe из provider_meta:</p>
+                <p class="muted" style="margin:0.4rem 0 0.2rem;font-size:0.78rem">last_ping / last_probe из provider_meta:</p>
                 <pre style="white-space:pre-wrap;word-break:break-word;font-size:0.7rem;max-height:10rem;overflow:auto;margin:0;padding:0.55rem;background:var(--surface);border:1px solid var(--border);border-radius:6px"><?= View::e($liveProbeMeta) ?></pre>
             <?php endif; ?>
             <?php if ($liveProbeLog !== ''): ?>
