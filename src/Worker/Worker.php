@@ -204,11 +204,12 @@ final class Worker
                 $lastBalanceErr = null;
                 break;
             } catch (\Wlsearch\Provider\BalanceShortException $e) {
+                // больше не блокируем create по оценке запаса; на всякий случай пробуем другой аккаунт
                 $lastBalanceErr = $e;
                 if ($accountId > 0) {
                     $accounts->markUsed($accountId, $e->getMessage());
                 }
-                fwrite(STDOUT, "run #{$id}: balance short on acc #" . ($accountId ?: '-') . ' — ' . $e->getMessage() . "\n");
+                fwrite(STDOUT, "run #{$id}: balance note on acc #" . ($accountId ?: '-') . ' — ' . $e->getMessage() . "\n");
                 $switched = $this->reassignOrderingAccount($run, array_keys($tried));
                 if ($switched) {
                     $run = $this->runs->get($id) ?? $run;
@@ -216,20 +217,7 @@ final class Worker
                     fwrite(STDOUT, "run #{$id}: пробуем acc #{$accountId}\n");
                     continue;
                 }
-                // Ждём пополнения: ORDERING остаётся, лимит IP не тратится (ipv4 пустой)
-                $createdAge = max(0, time() - (strtotime((string) ($run['created_at'] ?? 'now')) ?: time()));
-                $msg = 'ожидание запаса (пополните аккаунт или включите другой): ' . $e->getMessage();
-                // не трогаем updated_at — иначе вечное ожидание
-                $this->pdo->prepare(
-                    'UPDATE runs SET error_message = ? WHERE id = ? AND state = \'ORDERING\''
-                )->execute([mb_substr($msg, 0, 2000), $id]);
-                if ($createdAge > 21600) { // 6 часов
-                    $this->pdo->prepare(
-                        "UPDATE runs SET state = 'SKIPPED', verdict = 'SKIPPED', error_message = ?, updated_at = NOW() WHERE id = ?"
-                    )->execute([mb_substr('таймаут ожидания запаса: ' . $e->getMessage(), 0, 2000), $id]);
-                    fwrite(STDOUT, "run #{$id}: SKIPPED после 6ч без запаса\n");
-                }
-                return;
+                throw $e;
             } catch (\Throwable $e) {
                 if ($accountId > 0) {
                     $accounts->markUsed($accountId, $e->getMessage());
@@ -239,13 +227,7 @@ final class Worker
         }
 
         if ($lastBalanceErr !== null || !isset($info)) {
-            // Все аккаунты без запаса в этой попытке — остаёмся в ORDERING
-            $msg = 'ожидание запаса (пополните или включите другой аккаунт)'
-                . ($lastBalanceErr ? (': ' . $lastBalanceErr->getMessage()) : '');
-            $this->pdo->prepare(
-                'UPDATE runs SET error_message = ? WHERE id = ? AND state = \'ORDERING\''
-            )->execute([mb_substr($msg, 0, 2000), $id]);
-            return;
+            throw $lastBalanceErr ?? new \RuntimeException('create: no provider response');
         }
 
         $meta = null;

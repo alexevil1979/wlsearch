@@ -120,8 +120,8 @@ $defaultCount = max(1, min(10, $dailyCapacity > 0 ? $dailyCapacity : 1));
         <?php endif; ?>
         <?php if ($dailyCapacity <= 0): ?>
             <div class="flash flash-error" style="margin-top:0.75rem">
-                Лимит выданных IP на сегодня исчерпан для включённых аккаунтов (или баланс &lt; ~880 ₽).
-                Включите другой аккаунт в <a href="/accounts">Аккаунты</a>, пополните баланс, либо дождитесь завтра.
+                Лимит выданных IP на сегодня исчерпан для включённых аккаунтов.
+                Включите другой аккаунт в <a href="/accounts">Аккаунты</a> либо дождитесь завтра.
             </div>
         <?php endif; ?>
 

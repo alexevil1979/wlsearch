@@ -105,12 +105,8 @@ final class TimewebProvider implements ProviderInterface
 
         $shortage = $this->explainBalanceRisk($financesBefore, $attachIpv4After);
         if ($shortage !== null) {
+            // Только предупреждение в лог — не блокируем create (с ~500 ₽ раньше нормально создавалось)
             FileLog::write('timeweb', 'create:balance_warn', ['warn' => $shortage, 'finances' => $financesBefore]);
-        }
-        if ($this->isHardBalanceShort($financesBefore, $attachIpv4After)) {
-            throw new BalanceShortException(
-                $shortage ?? 'Недостаточно запаса Timeweb для create (риск no_paid)'
-            );
         }
 
         $resp = $this->http->request('POST', $this->base . '/servers', $body);
@@ -502,24 +498,13 @@ final class TimewebProvider implements ProviderInterface
             return null;
         }
         return sprintf(
-            'Риск no_paid: balance=%.2f ₽ < запас ≈%.0f ₽ (burn=%.0f + VPS~%.0f + IP~%.0f). '
-            . 'После первого оплаченного VPS на том же аккаунте второго часто не хватает — нужен другой аккаунт или пополнение ≈%.0f ₽.',
+            'Риск no_paid: balance=%.2f ₽ < оценка ≈%.0f ₽ (burn=%.0f + VPS~%.0f + IP~%.0f)',
             $balance,
             $total,
             $monthly,
             $vpsEst,
-            $ipEst,
-            max(0, $total - $balance)
+            $ipEst
         );
-    }
-
-    private function isHardBalanceShort(array $fin, bool $withIpv4): bool
-    {
-        $need = $this->estimateReserveNeed($fin, $withIpv4);
-        if ($need === null) {
-            return false;
-        }
-        return ((float) ($fin['balance'] ?? 0)) + 0.01 < $need['total'];
     }
 
     /** @return array{total:float,vps:float,ip:float}|null */
