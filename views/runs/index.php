@@ -63,10 +63,16 @@ $fmtDt = static function (?string $dt): string {
                 $state = (string) $r['state'];
                 $canDestroy = !in_array($state, ['DESTROYED', 'DESTROYING'], true) && !empty($r['provider_server_id']);
                 $canKeep = !in_array($state, ['DESTROYED', 'KEEP'], true);
-                $canRetryControl = in_array($state, ['FAIL_CONTROL', 'BS_CHECK', 'CONTROL_CHECK', 'PASS', 'FAIL_BS', 'KEEP'], true) && !empty($r['ipv4']);
+                $canRetryControl = in_array($state, ['FAIL_CONTROL', 'BS_CHECK', 'CONTROL_CHECK', 'PASS', 'FAIL_BS', 'KEEP', 'BOOTSTRAPPING'], true) && !empty($r['ipv4']);
                 $canRetryBs = !empty($r['ipv4'])
-                    && !in_array($state, ['DESTROYED', 'DESTROYING', 'ORDERING', 'PROVISIONING', 'BOOTSTRAPPING'], true);
-                $err = (string) ($r['error_message'] ?? '');
+                    && !in_array($state, ['DESTROYED', 'DESTROYING', 'ORDERING', 'PROVISIONING'], true);
+                $probeHint = '';
+                if ($state === 'BOOTSTRAPPING' && !empty($r['ipv4'])) {
+                    $probeHint = \Wlsearch\Probe\CloudInitBuilder::manualInstallBash(
+                        (string) ($r['provider'] ?? 'timeweb'),
+                        $id
+                    );
+                }
                 $accLabel = '';
                 if (!empty($r['account_name'])) {
                     $accLabel = '#' . (int) ($r['provider_account_id'] ?? 0) . ' ' . (string) $r['account_name'];
@@ -84,6 +90,7 @@ $fmtDt = static function (?string $dt): string {
                     $testedRaw = $r['updated_at'] ?? null;
                 }
                 $tested = $fmtDt($testedRaw !== null && $testedRaw !== '' ? (string) $testedRaw : null);
+                $err = (string) ($r['error_message'] ?? '');
                 ?>
                 <tr>
                     <td class="cell-narrow">#<?= $id ?></td>
@@ -146,6 +153,18 @@ $fmtDt = static function (?string $dt): string {
                         </div>
                     </td>
                 </tr>
+                <?php if ($probeHint !== ''): ?>
+                <tr>
+                    <td colspan="10" style="padding-top:0">
+                        <details>
+                            <summary class="muted" style="cursor:pointer;font-size:0.85rem">
+                                Probe не ответил (cloud-init). Вставь на VPS и нажми BS
+                            </summary>
+                            <pre style="white-space:pre-wrap;font-size:0.72rem;max-height:14rem;overflow:auto;margin:0.4rem 0 0"><?= View::e($probeHint) ?></pre>
+                        </details>
+                    </td>
+                </tr>
+                <?php endif; ?>
             <?php endforeach; ?>
             </tbody>
         </table>
