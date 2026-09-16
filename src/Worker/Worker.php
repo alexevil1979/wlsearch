@@ -515,24 +515,38 @@ final class Worker
             && empty($meta['probe_reboot'])
             && ($age >= $rebootAfterSec || (int) $meta['bootstrap_fail_ticks'] >= $rebootAfterTicks);
 
-        // Сначала только reboot; bootstrap переустановим после паузы + ping
+        // Hang → сразу переустановка bootstrap + reboot (не голый reboot:
+        // старый #!/bin/sh user-data после reboot сам не повторяется)
         if ($shouldReboot) {
             try {
                 $provider = ProviderFactory::forRun($run);
-                if (method_exists($provider, 'rebootInstance')) {
+                $provName = (string) ($run['provider'] ?? 'unknown');
+                $did = false;
+                if (method_exists($provider, 'repushCloudInitAndReboot')) {
+                    $script = CloudInitBuilder::forRerun($provName, $id);
+                    $provider->repushCloudInitAndReboot($serverId, $script);
+                    $meta['probe_repush'] = 1;
+                    $meta['probe_reinstall'] = 1;
+                    $meta['probe_reinstall_at'] = time();
+                    $did = true;
+                    fwrite(STDOUT, "run #{$id}: reinstall bootstrap + reboot (age={$age}s)\n");
+                } elseif (method_exists($provider, 'rebootInstance')) {
                     $provider->rebootInstance($serverId);
+                    $did = true;
+                    fwrite(STDOUT, "run #{$id}: reboot after probe hang (age={$age}s)\n");
+                }
+                if ($did) {
                     $meta['probe_reboot'] = 1;
                     $meta['probe_reboot_at'] = time();
                     $meta['bootstrap_fail_ticks'] = 0;
                     $this->saveMeta($id, $meta);
+                    $hint = !empty($meta['probe_reinstall'])
+                        ? "reinstall+reboot — пауза {$waitAfterRebootSec}s → ping → жду probe"
+                        : "reboot — пауза {$waitAfterRebootSec}s → ping → bootstrap";
                     $this->pdo->prepare(
                         'UPDATE runs SET error_message = ? WHERE id = ?'
                     )->execute([
-                        mb_substr(
-                            "bs5 reboot (age={$age}s) — пауза {$waitAfterRebootSec}s → ping → bootstrap",
-                            0,
-                            500
-                        ),
+                        mb_substr("bs5 {$hint} (age={$age}s)", 0, 500),
                         $id,
                     ]);
                     FileLog::write('probe', 'bootstrap:reboot', [
@@ -541,14 +555,14 @@ final class Worker
                         'server_id' => $serverId,
                         'age_s' => $age,
                         'fail_ticks' => (int) $meta['bootstrap_fail_ticks'],
-                        'provider' => (string) ($run['provider'] ?? ''),
+                        'provider' => $provName,
                         'clock_skew' => $clockSkew,
+                        'reinstall' => !empty($meta['probe_reinstall']),
                     ]);
-                    fwrite(STDOUT, "run #{$id}: reboot after probe hang (age={$age}s)\n");
                     return;
                 }
             } catch (\Throwable $e) {
-                fwrite(STDERR, "run #{$id}: probe reboot failed: " . $e->getMessage() . "\n");
+                fwrite(STDERR, "run #{$id}: probe reboot/reinstall failed: " . $e->getMessage() . "\n");
                 $meta['probe_reboot'] = 1;
                 $meta['probe_reboot_at'] = time();
                 $meta['probe_reboot_error'] = mb_substr($e->getMessage(), 0, 200);
@@ -556,16 +570,17 @@ final class Worker
             }
         }
 
-        // После reboot: 1.5 мин → ping в meta/админку → повторная установка bootstrap
+        // После reboot: 1.5 мин → ping в админку; если reinstall ещё не было — делаем
         if (
             $serverId !== ''
             && !empty($meta['probe_reboot'])
-            && empty($meta['probe_reinstall'])
             && $ageSinceReboot !== null
             && $ageSinceReboot >= $waitAfterRebootSec
+            && empty($meta['ping_after_reboot'])
         ) {
             $ping = $this->pingHost($ipv4);
             $meta['last_ping'] = $ping;
+            $meta['ping_after_reboot'] = 1;
             $this->saveMeta($id, $meta);
             FileLog::write('probe', 'bootstrap:ping', [
                 'run_id' => $id,
@@ -575,54 +590,60 @@ final class Worker
             ]);
             fwrite(STDOUT, "run #{$id}: ping after reboot: {$ping['summary']}\n");
 
-            try {
-                $provider = ProviderFactory::forRun($run);
-                if (method_exists($provider, 'repushCloudInitAndReboot')) {
-                    $provName = (string) ($run['provider'] ?? 'unknown');
-                    $script = $provName === 'yandex'
-                        ? CloudInitBuilder::forRerun($provName, $id)
-                        : CloudInitBuilder::forRun($provName, $id);
-                    $provider->repushCloudInitAndReboot($serverId, $script);
+            if (empty($meta['probe_reinstall'])) {
+                try {
+                    $provider = ProviderFactory::forRun($run);
+                    if (method_exists($provider, 'repushCloudInitAndReboot')) {
+                        $provName = (string) ($run['provider'] ?? 'unknown');
+                        $script = CloudInitBuilder::forRerun($provName, $id);
+                        $provider->repushCloudInitAndReboot($serverId, $script);
+                        $meta['probe_reinstall'] = 1;
+                        $meta['probe_reinstall_at'] = time();
+                        $meta['probe_repush'] = 1;
+                        $meta['bootstrap_fail_ticks'] = 0;
+                        $this->saveMeta($id, $meta);
+                        $msg = "ping: {$ping['summary']} → reinstall bootstrap, жду probe ~{$waitAfterReinstallSec}s";
+                        $this->pdo->prepare(
+                            'UPDATE runs SET error_message = ? WHERE id = ?'
+                        )->execute([mb_substr($msg, 0, 500), $id]);
+                        FileLog::write('probe', 'bootstrap:reinstall', [
+                            'run_id' => $id,
+                            'ipv4' => $ipv4,
+                            'server_id' => $serverId,
+                            'provider' => $provName,
+                            'ping' => $ping,
+                        ]);
+                        fwrite(STDOUT, "run #{$id}: {$msg}\n");
+                        return;
+                    }
                     $meta['probe_reinstall'] = 1;
                     $meta['probe_reinstall_at'] = time();
-                    $meta['probe_repush'] = 1;
-                    $meta['bootstrap_fail_ticks'] = 0;
+                    $meta['probe_reinstall_skip'] = 'no_repush_method';
                     $this->saveMeta($id, $meta);
-                    $msg = "ping: {$ping['summary']} → reinstall bootstrap, жду probe ~{$waitAfterReinstallSec}s";
+                } catch (\Throwable $e) {
+                    fwrite(STDERR, "run #{$id}: bootstrap reinstall failed: " . $e->getMessage() . "\n");
+                    $meta['probe_reinstall'] = 1;
+                    $meta['probe_reinstall_at'] = time();
+                    $meta['probe_reinstall_error'] = mb_substr($e->getMessage(), 0, 200);
+                    $this->saveMeta($id, $meta);
                     $this->pdo->prepare(
                         'UPDATE runs SET error_message = ? WHERE id = ?'
-                    )->execute([mb_substr($msg, 0, 500), $id]);
-                    FileLog::write('probe', 'bootstrap:reinstall', [
-                        'run_id' => $id,
-                        'ipv4' => $ipv4,
-                        'server_id' => $serverId,
-                        'provider' => (string) ($run['provider'] ?? ''),
-                        'ping' => $ping,
+                    )->execute([
+                        mb_substr(
+                            "ping: {$ping['summary']}; reinstall fail: " . $e->getMessage(),
+                            0,
+                            500
+                        ),
+                        $id,
                     ]);
-                    fwrite(STDOUT, "run #{$id}: {$msg}\n");
                     return;
                 }
-                $meta['probe_reinstall'] = 1;
-                $meta['probe_reinstall_at'] = time();
-                $meta['probe_reinstall_skip'] = 'no_repush_method';
-                $this->saveMeta($id, $meta);
-                $this->pdo->prepare(
-                    'UPDATE runs SET error_message = ? WHERE id = ?'
-                )->execute([
-                    mb_substr("ping: {$ping['summary']} — нет repush у провайдера, жду probe", 0, 500),
-                    $id,
-                ]);
-            } catch (\Throwable $e) {
-                fwrite(STDERR, "run #{$id}: bootstrap reinstall failed: " . $e->getMessage() . "\n");
-                $meta['probe_reinstall'] = 1;
-                $meta['probe_reinstall_at'] = time();
-                $meta['probe_reinstall_error'] = mb_substr($e->getMessage(), 0, 200);
-                $this->saveMeta($id, $meta);
+            } else {
                 $this->pdo->prepare(
                     'UPDATE runs SET error_message = ? WHERE id = ?'
                 )->execute([
                     mb_substr(
-                        "ping: {$ping['summary']}; reinstall fail: " . $e->getMessage(),
+                        "ping: {$ping['summary']} — bootstrap уже переустановлен, жду probe",
                         0,
                         500
                     ),
@@ -799,7 +820,7 @@ final class Worker
             }
         }
 
-        // после этого тика уже пора reboot
+        // после этого тика уже пора reinstall+reboot
         if (
             $serverId !== ''
             && empty($meta['probe_reboot'])
@@ -807,31 +828,43 @@ final class Worker
         ) {
             try {
                 $provider = ProviderFactory::forRun($run);
-                if (method_exists($provider, 'rebootInstance')) {
+                $provName = (string) ($run['provider'] ?? 'unknown');
+                if (method_exists($provider, 'repushCloudInitAndReboot')) {
+                    $provider->repushCloudInitAndReboot(
+                        $serverId,
+                        CloudInitBuilder::forRerun($provName, $id)
+                    );
+                    $meta['probe_reinstall'] = 1;
+                    $meta['probe_reinstall_at'] = time();
+                    $meta['probe_repush'] = 1;
+                } elseif (method_exists($provider, 'rebootInstance')) {
                     $provider->rebootInstance($serverId);
-                    $meta['probe_reboot'] = 1;
-                    $meta['probe_reboot_at'] = time();
-                    $meta['bootstrap_fail_ticks'] = 0;
-                    $this->saveMeta($id, $meta);
-                    $this->pdo->prepare(
-                        'UPDATE runs SET error_message = ? WHERE id = ?'
-                    )->execute([
-                        mb_substr(
-                            "bs5 reboot — пауза {$waitAfterRebootSec}s → ping → bootstrap",
-                            0,
-                            500
-                        ),
-                        $id,
-                    ]);
-                    FileLog::write('probe', 'bootstrap:reboot', [
-                        'run_id' => $id,
-                        'ipv4' => $ipv4,
-                        'age_s' => $age,
-                        'fail_ticks' => (int) $meta['bootstrap_fail_ticks'],
-                    ]);
-                    fwrite(STDOUT, "run #{$id}: reboot at end of tick\n");
-                    return;
+                } else {
+                    throw new \RuntimeException('no reboot/repush method');
                 }
+                $meta['probe_reboot'] = 1;
+                $meta['probe_reboot_at'] = time();
+                $meta['bootstrap_fail_ticks'] = 0;
+                $this->saveMeta($id, $meta);
+                $this->pdo->prepare(
+                    'UPDATE runs SET error_message = ? WHERE id = ?'
+                )->execute([
+                    mb_substr(
+                        "bs5 reinstall+reboot — пауза {$waitAfterRebootSec}s → ping → probe",
+                        0,
+                        500
+                    ),
+                    $id,
+                ]);
+                FileLog::write('probe', 'bootstrap:reboot', [
+                    'run_id' => $id,
+                    'ipv4' => $ipv4,
+                    'age_s' => $age,
+                    'fail_ticks' => (int) $meta['bootstrap_fail_ticks'],
+                    'reinstall' => !empty($meta['probe_reinstall']),
+                ]);
+                fwrite(STDOUT, "run #{$id}: reinstall+reboot at end of tick\n");
+                return;
             } catch (\Throwable $e) {
                 fwrite(STDERR, "run #{$id}: late reboot failed: " . $e->getMessage() . "\n");
             }

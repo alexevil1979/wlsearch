@@ -5,11 +5,14 @@ declare(strict_types=1);
 namespace Wlsearch\Probe;
 
 /**
- * Probe user-data для Timeweb/Selectel.
+ * Probe user-data для Timeweb/Selectel/Yandex.
  *
  * Важно: сначала python (без apt) — иначе cloud-init часами висит на
- * apt-get update/nginx (зеркало Timeweb), снаружи Connection refused.
- * nginx-light — только фоном, не блокирует старт.
+ * apt-get update/nginx, снаружи Connection refused / timeout.
+ * nginx-light — только фоном и только если конфиг валиден (не убивает probe зря).
+ *
+ * Create/reinstall: #cloud-config с bootcmd + per-boot — probe ставится
+ * на каждом буте (после обычного reboot и после updateMetadata).
  */
 final class CloudInitBuilder
 {
@@ -21,28 +24,50 @@ final class CloudInitBuilder
 
     public static function forRun(string $provider, int $runId): string
     {
+        return self::cloudConfig($provider, $runId, 'create');
+    }
+
+    /** Сырой bash для ручной вставки / сериал-консоли. */
+    public static function manualInstallBash(string $provider, int $runId): string
+    {
         $runId = (int) $runId;
         $body = self::normalizeLf(self::installScriptBody($provider, $runId));
         return "#!/bin/sh\n# wlsearch probe run_{$runId}\n" . $body;
     }
 
-    public static function manualInstallBash(string $provider, int $runId): string
-    {
-        return self::forRun($provider, $runId);
-    }
-
     /**
-     * Повторная установка probe после reboot: #cloud-config + bootcmd
-     * (bootcmd выполняется на каждом буте — после updateMetadata + restart).
+     * Повторная установка после reboot: тот же cloud-config (bootcmd + per-boot).
      */
     public static function forRerun(string $provider, int $runId): string
     {
+        return self::cloudConfig($provider, $runId, 'reinstall');
+    }
+
+    private static function cloudConfig(string $provider, int $runId, string $tag): string
+    {
         $runId = (int) $runId;
-        $b64 = base64_encode(self::normalizeLf(self::installScriptBody($provider, $runId)));
+        $tag = preg_replace('/[^a-z0-9_\-]/i', '', $tag) ?: 'run';
+        $script = self::manualInstallBash($provider, $runId);
+        $b64 = base64_encode($script);
+
+        // bootcmd — каждый бут (не зависит от write_files order)
+        // write_files per-boot — запасной путь на следующих бутах
+        // runcmd — первая установка, если bootcmd ещё без сети
         return "#cloud-config\n"
-            . "# wlsearch probe reinstall run_{$runId}\n"
+            . "# wlsearch probe {$tag} run_{$runId}\n"
+            . "write_files:\n"
+            . "  - path: /var/lib/cloud/scripts/per-boot/99-wlsearch.sh\n"
+            . "    permissions: '0755'\n"
+            . "    encoding: b64\n"
+            . "    content: {$b64}\n"
+            . "  - path: /usr/local/bin/wlsearch-bootstrap.sh\n"
+            . "    permissions: '0755'\n"
+            . "    encoding: b64\n"
+            . "    content: {$b64}\n"
             . "bootcmd:\n"
-            . "  - [ bash, -c, \"echo {$b64} | base64 -d | bash\" ]\n";
+            . "  - [ bash, -c, \"echo {$b64} | base64 -d | bash\" ]\n"
+            . "runcmd:\n"
+            . "  - [ bash, /usr/local/bin/wlsearch-bootstrap.sh ]\n";
     }
 
     private static function normalizeLf(string $s): string
@@ -62,7 +87,7 @@ set +e
 exec >>/var/log/wlsearch-cloud-init.log 2>&1
 echo "wlsearch-probe start \$(date -u -Iseconds)"
 export DEBIAN_FRONTEND=noninteractive
-mkdir -p /var/www/html /etc/wlsearch-ssl /usr/local/bin /var/log /etc/nginx/ssl
+mkdir -p /var/www/html /etc/wlsearch-ssl /usr/local/bin /var/log /etc/nginx/ssl /etc/default
 
 # 1) открыть сеть сразу (иначе снаружи hang / refused)
 command -v ufw >/dev/null 2>&1 && ufw --force disable
@@ -83,20 +108,38 @@ base64 -d > /usr/local/bin/wlsearch-probe.py <<'WLSEARCH_PY_B64'
 {$pyB64Wrapped}
 WLSEARCH_PY_B64
 chmod +x /usr/local/bin/wlsearch-probe.py
-nohup env WLSEARCH_IP="\$IP" python3 /usr/local/bin/wlsearch-probe.py >>/var/log/wlsearch-probe.log 2>&1 &
+printf 'WLSEARCH_IP=%s\\n' "\$IP" > /etc/default/wlsearch-probe
+cat > /etc/systemd/system/wlsearch-probe.service <<'EOF'
+[Unit]
+Description=wlsearch probe
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/default/wlsearch-probe
+ExecStart=/usr/bin/python3 /usr/local/bin/wlsearch-probe.py
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload 2>/dev/null
+systemctl enable wlsearch-probe.service 2>/dev/null
+systemctl restart wlsearch-probe.service 2>/dev/null \\
+  || nohup env WLSEARCH_IP="\$IP" python3 /usr/local/bin/wlsearch-probe.py >>/var/log/wlsearch-probe.log 2>&1 &
 sleep 1
 curl -sS -m 2 http://127.0.0.1/ | head -c 120
 echo
 echo "python probe up \$(date -u -Iseconds)"
 
-# 3) nginx опционально в фоне (не блокирует boot)
+# 3) nginx опционально в фоне (не блокирует boot; порты забирает только после nginx -t)
 (
   apt-get update -qq >>/var/log/wlsearch-apt.log 2>&1
   apt-get install -y -qq nginx-light openssl >>/var/log/wlsearch-apt.log 2>&1 \\
     || apt-get install -y -qq nginx-core openssl >>/var/log/wlsearch-apt.log 2>&1 || exit 0
   command -v nginx >/dev/null 2>&1 || exit 0
-  pkill -f wlsearch-probe.py 2>/dev/null
-  fuser -k 80/tcp 443/tcp 2>/dev/null
   openssl req -x509 -nodes -newkey rsa:2048 -days 3650 \\
     -keyout /etc/nginx/ssl/probe.key -out /etc/nginx/ssl/probe.crt \\
     -subj "/CN=\${IP}/O=wlsearch-probe" 2>/dev/null
@@ -119,7 +162,11 @@ server {
 }
 NGX
   ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default
-  nginx -t && systemctl restart nginx
+  nginx -t || exit 0
+  systemctl stop wlsearch-probe.service 2>/dev/null
+  pkill -f wlsearch-probe.py 2>/dev/null
+  fuser -k 80/tcp 443/tcp 2>/dev/null
+  systemctl restart nginx
   ufw --force disable 2>/dev/null
   echo "nginx probe up \$(date -u -Iseconds)" >>/var/log/wlsearch-cloud-init.log
 ) >/dev/null 2>&1 &
