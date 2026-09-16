@@ -455,10 +455,16 @@ final class Worker
             }
         }
         if (empty($meta['bootstrap_at'])) {
-            $meta['bootstrap_at'] = time();
+            $fromServer = strtotime((string) ($run['server_created_at'] ?? '')) ?: 0;
+            $meta['bootstrap_at'] = $fromServer > 0 ? $fromServer : time();
             $this->saveMeta($id, $meta);
         }
         $bootstrapAt = (int) $meta['bootstrap_at'];
+        if ($bootstrapAt <= 0) {
+            $bootstrapAt = time();
+            $meta['bootstrap_at'] = $bootstrapAt;
+            $this->saveMeta($id, $meta);
+        }
 
         $attempts = 5;
         $sleepSec = 8;
@@ -549,36 +555,59 @@ final class Worker
             }
         }
 
-        // Один раз: если cloud-init с create не поднял probe — перезалить user-data и reboot
-        if ($age >= 90 && $serverId !== '' && (string) ($run['provider'] ?? '') === 'timeweb') {
-            if (empty($meta['probe_repush'])) {
-                try {
+        // Один раз: reboot если probe долго не отвечает (Yandex и др.)
+        if ($age >= 90 && $serverId !== '' && empty($meta['probe_reboot'])) {
+            try {
+                $provider = ProviderFactory::forRun($run);
+                $didReboot = false;
+                // Timeweb: сначала cloud-init repush + reboot
+                if (
+                    (string) ($run['provider'] ?? '') === 'timeweb'
+                    && empty($meta['probe_repush'])
+                    && method_exists($provider, 'repushCloudInitAndReboot')
+                ) {
                     $script = CloudInitBuilder::forRun((string) $run['provider'], $id);
-                    $provider = ProviderFactory::forRun($run);
-                    if (method_exists($provider, 'repushCloudInitAndReboot')) {
-                        /** @var \Wlsearch\Provider\TimewebProvider $provider */
-                        $provider->repushCloudInitAndReboot($serverId, $script);
-                        $meta['probe_repush'] = 1;
-                        $meta['probe_repush_at'] = date('c');
-                        $this->saveMeta($id, $meta);
-                        $this->pdo->prepare(
-                            'UPDATE runs SET error_message = ? WHERE id = ?'
-                        )->execute([
-                            mb_substr('cloud-init не ответил — перезалил user-data + reboot, жду probe', 0, 500),
-                            $id,
-                        ]);
-                        fwrite(STDOUT, "run #{$id}: repush cloud_init + reboot\n");
-                    }
-                } catch (\Throwable $e) {
-                    fwrite(STDERR, "run #{$id}: probe repush failed: " . $e->getMessage() . "\n");
+                    /** @var \Wlsearch\Provider\TimewebProvider $provider */
+                    $provider->repushCloudInitAndReboot($serverId, $script);
+                    $meta['probe_repush'] = 1;
+                    $meta['probe_repush_at'] = date('c');
+                    $didReboot = true;
+                    fwrite(STDOUT, "run #{$id}: repush cloud_init + reboot\n");
+                } elseif (method_exists($provider, 'rebootInstance')) {
+                    $provider->rebootInstance($serverId);
+                    $didReboot = true;
+                    fwrite(STDOUT, "run #{$id}: reboot after probe hang\n");
                 }
+                if ($didReboot) {
+                    $meta['probe_reboot'] = 1;
+                    $meta['probe_reboot_at'] = time();
+                    // новый отсчёт ожидания после reboot
+                    $meta['bootstrap_at'] = time();
+                    $this->saveMeta($id, $meta);
+                    $this->pdo->prepare(
+                        'UPDATE runs SET error_message = ? WHERE id = ?'
+                    )->execute([
+                        mb_substr('reboot после таймаута probe — жду ответ снова', 0, 500),
+                        $id,
+                    ]);
+                    return;
+                }
+            } catch (\Throwable $e) {
+                fwrite(STDERR, "run #{$id}: probe reboot failed: " . $e->getMessage() . "\n");
+                $meta['probe_reboot'] = 1;
+                $meta['probe_reboot_error'] = mb_substr($e->getMessage(), 0, 200);
+                $this->saveMeta($id, $meta);
             }
         }
 
         $timeout = Settings::int('BOOTSTRAP_TIMEOUT_SEC', Env::int('BOOTSTRAP_TIMEOUT_SEC', 600));
         if ($age > $timeout) {
             $run['ipv4'] = $ipv4;
-            $this->failControl($run, 'bootstrap timeout: ' . $err);
+            $hint = !empty($meta['probe_reboot'])
+                ? 'bootstrap timeout после reboot: '
+                : 'bootstrap timeout: ';
+            // failControl → DESTROYING (если не keep) — очередь пойдёт дальше
+            $this->failControl($run, $hint . $err);
         }
     }
 

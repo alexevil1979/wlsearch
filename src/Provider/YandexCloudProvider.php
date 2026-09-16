@@ -190,6 +190,22 @@ final class YandexCloudProvider implements ProviderInterface
         FileLog::write('yandex', 'destroy:done', ['instance_id' => $serverId]);
     }
 
+    /** Restart VM (probe hang recovery). */
+    public function rebootInstance(string $serverId): void
+    {
+        FileLog::write('yandex', 'reboot:start', [
+            'instance_id' => $serverId,
+            'account' => $this->cfg->logTag(),
+        ]);
+        $op = $this->api(
+            'POST',
+            'https://compute.api.cloud.yandex.net/compute/v1/instances/'
+            . rawurlencode($serverId) . ':restart'
+        );
+        $this->waitOperation($op);
+        FileLog::write('yandex', 'reboot:done', ['instance_id' => $serverId]);
+    }
+
     /** @param array<string, mixed> $inst */
     private function mapInstance(array $inst): ServerInfo
     {
