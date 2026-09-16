@@ -77,10 +77,11 @@ $renderRunRows = static function (array $r, string $csrf, callable $badgeClass, 
                     </td>
                     <td class="cell-narrow">
                         <?php if (!empty($r['ipv4'])): ?>
-                            <code><?= View::e((string) $r['ipv4']) ?></code>
-                            <button type="button" class="btn btn-secondary btn-sm"
+                            <?php $ip = (string) $r['ipv4']; ?>
+                            <code><?= View::e($ip) ?></code>
+                            <button type="button" class="btn btn-secondary btn-sm js-copy-ip"
                                     title="Копировать IP"
-                                    onclick="navigator.clipboard.writeText(<?= json_encode((string) $r['ipv4'], JSON_UNESCAPED_UNICODE) ?>).then(function(){var b=this;b.textContent='ok';setTimeout(function(){b.textContent='copy'},800)}.bind(this)).catch(function(){})">copy</button>
+                                    data-ip="<?= View::e($ip) ?>">copy</button>
                         <?php else: ?>
                             <span class="muted">—</span>
                         <?php endif; ?>
@@ -249,6 +250,26 @@ $renderRunRows = static function (array $r, string $csrf, callable $badgeClass, 
 
 <script>
 (function () {
+    document.addEventListener('click', function (e) {
+        var btn = e.target && e.target.closest ? e.target.closest('.js-copy-ip') : null;
+        if (!btn) return;
+        e.preventDefault();
+        var ip = btn.getAttribute('data-ip') || '';
+        if (!ip) return;
+        var done = function () {
+            var prev = btn.textContent;
+            btn.textContent = 'ok';
+            setTimeout(function () { btn.textContent = prev || 'copy'; }, 800);
+        };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(ip).then(done).catch(function () {
+                window.prompt('IP', ip);
+            });
+        } else {
+            window.prompt('IP', ip);
+        }
+    });
+
     var live = <?= $liveRun !== null ? 'true' : 'false' ?>;
     var ms = live ? 3000 : 20000;
     setTimeout(function () {
