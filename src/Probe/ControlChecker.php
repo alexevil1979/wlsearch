@@ -74,7 +74,7 @@ final class ControlChecker
      */
     private function probeOne(string $url, string $marker): array
     {
-        $http = $this->http->getPlain($url, 15, true);
+        $resp = $this->http->getPlain($url, 15, true);
         $snippet = mb_substr($resp['body'], 0, 500);
         if ($resp['error'] !== null) {
             return ['ok' => false, 'status' => $resp['status'], 'body_snippet' => $snippet, 'error' => $resp['error']];
