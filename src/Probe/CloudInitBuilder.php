@@ -17,8 +17,8 @@ final class CloudInitBuilder
      */
     public static function oneLiner(string $provider, int $runId): string
     {
-        $inner = self::installScriptBody($provider, $runId);
-        // сжатый однострочник для копипаста
+        $inner = str_replace("\r\n", "\n", self::installScriptBody($provider, $runId));
+        $inner = str_replace("\r", "\n", $inner);
         $b64 = base64_encode($inner);
         return "echo {$b64} | base64 -d | bash";
     }
@@ -27,7 +27,8 @@ final class CloudInitBuilder
     {
         $provider = preg_replace('/[^a-z0-9_\-]/i', '', $provider) ?: 'unknown';
         $runId = (int) $runId;
-        $body = self::installScriptBody($provider, $runId);
+        $body = str_replace("\r\n", "\n", self::installScriptBody($provider, $runId));
+        $body = str_replace("\r", "\n", $body);
 
         return "#!/bin/sh\n# wlsearch probe run_{$runId}\n" . $body;
     }
