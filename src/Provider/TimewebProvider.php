@@ -142,6 +142,19 @@ final class TimewebProvider implements ProviderInterface
             'create_status' => $info->status,
         ]];
 
+        // Whitelist firewall без 80/443 → снаружи timeout при живом probe
+        try {
+            $fw = $this->detachCloudFirewall($info->id);
+            if ($fw !== []) {
+                $meta['_wlsearch_meta']['firewall_detached'] = $fw;
+            }
+        } catch (\Throwable $e) {
+            FileLog::write('timeweb', 'firewall:detach_error', [
+                'server_id' => $info->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
+
         if ($info->isUnpaidOrBlocked()) {
             $finAfter = $this->fetchFinances();
             FileLog::write('timeweb', 'create:no_paid', [
@@ -942,5 +955,57 @@ final class TimewebProvider implements ProviderInterface
                 'Timeweb reboot HTTP ' . $reboot['status'] . ': ' . mb_substr($reboot['body'], 0, 400)
             );
         }
+    }
+
+    /**
+     * Снять облачный Firewall Timeweb с VPS.
+     * Whitelist без 80/443 даёт снаружи timeout при живом localhost.
+     *
+     * @return list<string> ID отвязанных групп
+     */
+    public function detachCloudFirewall(string $serverId): array
+    {
+        $detached = [];
+        $resp = $this->http->request(
+            'GET',
+            $this->base . '/firewall/service/server/' . rawurlencode($serverId)
+        );
+        FileLog::write('timeweb', 'firewall:list', [
+            'server_id' => $serverId,
+            'http' => $resp['status'],
+            'body' => mb_substr($resp['body'], 0, 2000),
+        ]);
+        if ($resp['status'] < 200 || $resp['status'] >= 300) {
+            return [];
+        }
+        $json = json_decode($resp['body'], true);
+        $groups = is_array($json['groups'] ?? null) ? $json['groups'] : [];
+        foreach ($groups as $g) {
+            if (!is_array($g)) {
+                continue;
+            }
+            $gid = (string) ($g['id'] ?? '');
+            if ($gid === '') {
+                continue;
+            }
+            $del = $this->http->request(
+                'DELETE',
+                $this->base . '/firewall/groups/' . rawurlencode($gid)
+                    . '/resources/' . rawurlencode($serverId)
+                    . '?resource_type=server'
+            );
+            FileLog::write('timeweb', 'firewall:detach', [
+                'server_id' => $serverId,
+                'group_id' => $gid,
+                'group_name' => $g['name'] ?? null,
+                'policy' => $g['policy'] ?? null,
+                'http' => $del['status'],
+                'body' => mb_substr($del['body'], 0, 400),
+            ]);
+            if ($del['status'] >= 200 && $del['status'] < 300) {
+                $detached[] = $gid;
+            }
+        }
+        return $detached;
     }
 }

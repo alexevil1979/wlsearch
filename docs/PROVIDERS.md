@@ -36,11 +36,9 @@ Docs: https://docs.selectel.ru/cloud-servers/
 
 ## Probe
 
-Timeweb `cloud_init` = `#!/bin/sh`:
-1. **сразу** `ufw disable` + python3 probe :80/:443 (без apt — иначе boot висит на зеркале)
-2. nginx-light опционально **в фоне**
-Ручной: `scripts/install-probe.sh <runId> timeweb` или one-liner в UI.
-Selectel: тот же скрипт в Nova `user_data` (base64).
+Timeweb `cloud_init` = `#!/bin/sh`: сразу python :80/:443 (без apt), nginx фоном.
+**Облачный Firewall** (Сети → Firewall): whitelist без 80/443 → снаружи timeout
+при живом localhost. Worker/create отвязывает сервер от групп firewall.
 
 ## ASN
 

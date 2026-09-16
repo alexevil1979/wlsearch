@@ -447,20 +447,58 @@ final class Worker
         }
 
         $age = $this->updatedAgeSeconds($run);
-        $waitMsg = 'ожидание probe ' . $age . 's: ' . ($result['error'] ?? 'no probe');
+        $err = (string) ($result['error'] ?? 'no probe');
+        $waitMsg = 'ожидание probe ' . $age . 's: ' . $err;
         $this->pdo->prepare(
             'UPDATE runs SET error_message = ? WHERE id = ? AND state = \'BOOTSTRAPPING\''
         )->execute([mb_substr($waitMsg, 0, 500), $id]);
 
+        $meta = [];
+        if (!empty($run['provider_meta'])) {
+            $decoded = json_decode((string) $run['provider_meta'], true);
+            if (is_array($decoded)) {
+                $meta = $decoded;
+            }
+        }
+
+        // Снаружи timeout при живом localhost → облачный Firewall Timeweb (whitelist)
+        $looksBlocked = str_contains(strtolower($err), 'timed out')
+            || str_contains(strtolower($err), 'timeout')
+            || str_contains(strtolower($err), 'connection refused');
+        if (
+            $looksBlocked
+            && $age >= 20
+            && $serverId !== ''
+            && (string) ($run['provider'] ?? '') === 'timeweb'
+            && empty($meta['firewall_detach_tried'])
+        ) {
+            try {
+                $provider = ProviderFactory::forRun($run);
+                if (method_exists($provider, 'detachCloudFirewall')) {
+                    /** @var \Wlsearch\Provider\TimewebProvider $provider */
+                    $detached = $provider->detachCloudFirewall($serverId);
+                    $meta['firewall_detach_tried'] = 1;
+                    $meta['firewall_detached'] = $detached;
+                    $this->pdo->prepare(
+                        'UPDATE runs SET provider_meta = ?, error_message = ? WHERE id = ?'
+                    )->execute([
+                        json_encode($meta, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                        mb_substr(
+                            'снял cloud firewall (' . count($detached) . ' групп), жду probe: ' . $err,
+                            0,
+                            500
+                        ),
+                        $id,
+                    ]);
+                    fwrite(STDOUT, "run #{$id}: detached cloud firewall groups=" . count($detached) . "\n");
+                }
+            } catch (\Throwable $e) {
+                fwrite(STDERR, "run #{$id}: firewall detach: " . $e->getMessage() . "\n");
+            }
+        }
+
         // Один раз: если cloud-init с create не поднял probe — перезалить user-data и reboot
         if ($age >= 90 && $serverId !== '' && (string) ($run['provider'] ?? '') === 'timeweb') {
-            $meta = [];
-            if (!empty($run['provider_meta'])) {
-                $decoded = json_decode((string) $run['provider_meta'], true);
-                if (is_array($decoded)) {
-                    $meta = $decoded;
-                }
-            }
             if (empty($meta['probe_repush'])) {
                 try {
                     $script = CloudInitBuilder::forRun((string) $run['provider'], $id);
@@ -487,7 +525,7 @@ final class Worker
 
         $timeout = Settings::int('BOOTSTRAP_TIMEOUT_SEC', Env::int('BOOTSTRAP_TIMEOUT_SEC', 600));
         if ($age > $timeout) {
-            $this->failControl($run, 'bootstrap timeout: ' . ($result['error'] ?? 'no probe'));
+            $this->failControl($run, 'bootstrap timeout: ' . $err);
         }
     }
 
