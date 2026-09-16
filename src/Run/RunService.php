@@ -278,18 +278,7 @@ final class RunService
     /** @param list<array<string,mixed>> $pool */
     public function assertCanCreate(int $count = 1, string $provider = 'timeweb', array $pool = []): void
     {
-        $maxParallel = max(1, Settings::int('MAX_PARALLEL_VMS', 1));
-
-        $live = (int) $this->pdo->query(
-            "SELECT COUNT(*) FROM runs WHERE state IN ('PROVISIONING','BOOTSTRAPPING','CONTROL_CHECK','BS_CHECK','DESTROYING')"
-        )->fetchColumn();
-
-        // Очередь ORDERING можно копить; параллельно живых VM — не больше maxParallel
-        if ($live >= $maxParallel) {
-            throw new \RuntimeException(
-                "Сейчас уже {$live} живых VM (лимит параллели {$maxParallel}). Дождитесь destroy — очередь ORDERING можно копить."
-            );
-        }
+        // Параллель (MAX_PARALLEL_VMS) проверяет worker при create — в ORDERING можно копить свободно.
 
         if ($pool !== []) {
             $limit = $this->createsPerAccountDay($provider);
