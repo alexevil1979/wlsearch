@@ -455,20 +455,111 @@ final class Worker
                 $meta = $decoded;
             }
         }
-        if (empty($meta['bootstrap_at'])) {
-            $fromServer = strtotime((string) ($run['server_created_at'] ?? '')) ?: 0;
-            $meta['bootstrap_at'] = $fromServer > 0 ? $fromServer : time();
+
+        // Якорь возраста: server_created_at → bootstrap_at → now (не сбрасывать каждый тик!)
+        $anchor = strtotime((string) ($run['server_created_at'] ?? '')) ?: 0;
+        if ($anchor <= 0) {
+            $anchor = isset($meta['bootstrap_at']) ? (int) $meta['bootstrap_at'] : 0;
+        }
+        if ($anchor <= 0) {
+            $anchor = time();
+        }
+        if (!isset($meta['bootstrap_at']) || (int) $meta['bootstrap_at'] <= 0) {
+            $meta['bootstrap_at'] = $anchor;
             $this->saveMeta($id, $meta);
         }
-        $bootstrapAt = (int) $meta['bootstrap_at'];
-        if ($bootstrapAt <= 0) {
-            $bootstrapAt = time();
-            $meta['bootstrap_at'] = $bootstrapAt;
-            $this->saveMeta($id, $meta);
+        // после reboot ждём от reboot_at, иначе от создания сервера
+        $rebootAt = isset($meta['probe_reboot_at']) ? (int) $meta['probe_reboot_at'] : 0;
+        $age = max(0, time() - $anchor);
+        $ageSinceReboot = $rebootAt > 0 ? max(0, time() - $rebootAt) : null;
+
+        $timeout = Settings::int('BOOTSTRAP_TIMEOUT_SEC', Env::int('BOOTSTRAP_TIMEOUT_SEC', 600));
+        $rebootAfterSec = 60; // не ждать 20 минут — reboot через ~1 мин без probe
+        $waitAfterRebootSec = min(300, max(120, (int) ($timeout / 2)));
+
+        // Сначала reboot, если уже долго нет probe (до цикла попыток)
+        if (
+            $serverId !== ''
+            && empty($meta['probe_reboot'])
+            && $age >= $rebootAfterSec
+        ) {
+            try {
+                $provider = ProviderFactory::forRun($run);
+                $didReboot = false;
+                if (
+                    (string) ($run['provider'] ?? '') === 'timeweb'
+                    && empty($meta['probe_repush'])
+                    && method_exists($provider, 'repushCloudInitAndReboot')
+                ) {
+                    $script = CloudInitBuilder::forRun((string) $run['provider'], $id);
+                    /** @var \Wlsearch\Provider\TimewebProvider $provider */
+                    $provider->repushCloudInitAndReboot($serverId, $script);
+                    $meta['probe_repush'] = 1;
+                    $meta['probe_repush_at'] = date('c');
+                    $didReboot = true;
+                    fwrite(STDOUT, "run #{$id}: repush cloud_init + reboot (age={$age}s)\n");
+                } elseif (method_exists($provider, 'rebootInstance')) {
+                    $provider->rebootInstance($serverId);
+                    $didReboot = true;
+                    fwrite(STDOUT, "run #{$id}: reboot after probe hang (age={$age}s)\n");
+                }
+                if ($didReboot) {
+                    $meta['probe_reboot'] = 1;
+                    $meta['probe_reboot_at'] = time();
+                    $this->saveMeta($id, $meta);
+                    $this->pdo->prepare(
+                        'UPDATE runs SET error_message = ? WHERE id = ?'
+                    )->execute([
+                        mb_substr(
+                            "reboot после {$age}s без probe — жду ещё ~{$waitAfterRebootSec}s",
+                            0,
+                            500
+                        ),
+                        $id,
+                    ]);
+                    FileLog::write('probe', 'bootstrap:reboot', [
+                        'run_id' => $id,
+                        'ipv4' => $ipv4,
+                        'server_id' => $serverId,
+                        'age_s' => $age,
+                        'provider' => (string) ($run['provider'] ?? ''),
+                    ]);
+                    return;
+                }
+            } catch (\Throwable $e) {
+                fwrite(STDERR, "run #{$id}: probe reboot failed: " . $e->getMessage() . "\n");
+                $meta['probe_reboot'] = 1;
+                $meta['probe_reboot_at'] = time();
+                $meta['probe_reboot_error'] = mb_substr($e->getMessage(), 0, 200);
+                $this->saveMeta($id, $meta);
+            }
         }
 
-        $attempts = 5;
-        $sleepSec = 8;
+        // Уже был reboot и всё ещё тишина — destroy и очередь дальше
+        if ($ageSinceReboot !== null && $ageSinceReboot > $waitAfterRebootSec) {
+            $run['ipv4'] = $ipv4;
+            FileLog::write('probe', 'bootstrap:timeout_after_reboot', [
+                'run_id' => $id,
+                'ipv4' => $ipv4,
+                'age_s' => $age,
+                'age_since_reboot_s' => $ageSinceReboot,
+            ]);
+            $this->failControl(
+                $run,
+                "bootstrap timeout после reboot ({$ageSinceReboot}s): probe не отвечает"
+            );
+            return;
+        }
+
+        // Общий лимит без reboot (если reboot недоступен)
+        if (empty($meta['probe_reboot']) && $age > $timeout) {
+            $run['ipv4'] = $ipv4;
+            $this->failControl($run, 'bootstrap timeout: probe не отвечает ' . $age . 's');
+            return;
+        }
+
+        $attempts = 4;
+        $sleepSec = 5;
         $lastErr = 'no probe';
         $mode = (string) ($run['bs_mode'] ?? 'agent');
         $checker = $this->control->withLogContext([
@@ -479,26 +570,26 @@ final class Worker
         ]);
 
         for ($i = 1; $i <= $attempts; $i++) {
-            $age = max(0, time() - $bootstrapAt);
+            $ageNow = max(0, time() - $anchor);
             $result = $checker->withLogContext([
                 'run_id' => $id,
                 'ipv4' => $ipv4,
                 'provider' => (string) ($run['provider'] ?? ''),
                 'phase' => 'BOOTSTRAPPING',
                 'attempt' => $i,
-                'age_s' => $age,
+                'age_s' => $ageNow,
+                'reboot' => !empty($meta['probe_reboot']),
             ])->check($ipv4);
             if ($result['ok']) {
                 $this->pdo->prepare(
                     'UPDATE runs SET error_message = NULL WHERE id = ? AND state = \'BOOTSTRAPPING\''
                 )->execute([$id]);
                 $this->setState($id, 'CONTROL_CHECK');
-                FileLog::write('probe', 'bootstrap:ok', ['run_id' => $id, 'ipv4' => $ipv4, 'attempt' => $i, 'age_s' => $age]);
+                FileLog::write('probe', 'bootstrap:ok', ['run_id' => $id, 'ipv4' => $ipv4, 'attempt' => $i, 'age_s' => $ageNow]);
                 fwrite(STDOUT, "run #{$id}: probe responding → CONTROL_CHECK\n");
                 return;
             }
 
-            // HTTP уже отвечает — для bsbord этого достаточно
             if (in_array($mode, ['bsbord', 'both'], true)) {
                 $httpOnly = $checker->withLogContext([
                     'run_id' => $id,
@@ -506,7 +597,7 @@ final class Worker
                     'provider' => (string) ($run['provider'] ?? ''),
                     'phase' => 'BOOTSTRAPPING_HTTP',
                     'attempt' => $i,
-                    'age_s' => $age,
+                    'age_s' => $ageNow,
                 ])->checkHttp($ipv4);
                 if ($httpOnly['ok']) {
                     $this->pdo->prepare(
@@ -527,15 +618,19 @@ final class Worker
             $meta['last_probe'] = [
                 'at' => date('c'),
                 'attempt' => $i,
-                'age_s' => $age,
+                'age_s' => $ageNow,
+                'age_since_reboot_s' => $ageSinceReboot,
                 'error' => $lastErr,
                 'debug' => $lastDebug,
             ];
             $this->saveMeta($id, $meta);
 
+            $phase = !empty($meta['probe_reboot'])
+                ? ('после reboot ' . (int) ($ageSinceReboot ?? 0) . 's')
+                : ($ageNow . 's');
             $waitMsg = sprintf(
-                'ожидание probe %ds (повтор %d/%d): %s',
-                $age,
+                'ожидание probe %s (повтор %d/%d): %s',
+                $phase,
                 $i,
                 $attempts,
                 $lastErr
@@ -547,6 +642,7 @@ final class Worker
                 'run_id' => $id,
                 'ipv4' => $ipv4,
                 'msg' => $waitMsg,
+                'age_s' => $ageNow,
                 'debug' => $lastDebug,
             ]);
             fwrite(STDOUT, "run #{$id}: {$waitMsg}\n");
@@ -556,10 +652,11 @@ final class Worker
             }
         }
 
-        $age = max(0, time() - $bootstrapAt);
+        $age = max(0, time() - $anchor);
         $err = $lastErr;
+        $ageSinceReboot = $rebootAt > 0 ? max(0, time() - $rebootAt) : $ageSinceReboot;
 
-        // Снаружи timeout при живом localhost → облачный Firewall Timeweb (whitelist)
+        // Timeweb firewall detach
         $looksBlocked = str_contains(strtolower($err), 'timed out')
             || str_contains(strtolower($err), 'timeout')
             || str_contains(strtolower($err), 'connection refused');
@@ -595,65 +692,40 @@ final class Worker
             }
         }
 
-        // Один раз: reboot если probe долго не отвечает (Yandex и др.)
-        if ($age >= 90 && $serverId !== '' && empty($meta['probe_reboot'])) {
+        // Если за этот тик уже пора reboot — сделаем (на случай age вырос во время попыток)
+        if (
+            $serverId !== ''
+            && empty($meta['probe_reboot'])
+            && $age >= $rebootAfterSec
+        ) {
             try {
                 $provider = ProviderFactory::forRun($run);
-                $didReboot = false;
-                // Timeweb: сначала cloud-init repush + reboot
-                if (
-                    (string) ($run['provider'] ?? '') === 'timeweb'
-                    && empty($meta['probe_repush'])
-                    && method_exists($provider, 'repushCloudInitAndReboot')
-                ) {
-                    $script = CloudInitBuilder::forRun((string) $run['provider'], $id);
-                    /** @var \Wlsearch\Provider\TimewebProvider $provider */
-                    $provider->repushCloudInitAndReboot($serverId, $script);
-                    $meta['probe_repush'] = 1;
-                    $meta['probe_repush_at'] = date('c');
-                    $didReboot = true;
-                    fwrite(STDOUT, "run #{$id}: repush cloud_init + reboot\n");
-                } elseif (method_exists($provider, 'rebootInstance')) {
+                if (method_exists($provider, 'rebootInstance')) {
                     $provider->rebootInstance($serverId);
-                    $didReboot = true;
-                    fwrite(STDOUT, "run #{$id}: reboot after probe hang\n");
-                }
-                if ($didReboot) {
                     $meta['probe_reboot'] = 1;
                     $meta['probe_reboot_at'] = time();
-                    // новый отсчёт ожидания после reboot
-                    $meta['bootstrap_at'] = time();
                     $this->saveMeta($id, $meta);
                     $this->pdo->prepare(
                         'UPDATE runs SET error_message = ? WHERE id = ?'
                     )->execute([
-                        mb_substr('reboot после таймаута probe — жду ответ снова', 0, 500),
+                        mb_substr("reboot после {$age}s без probe — жду снова", 0, 500),
                         $id,
                     ]);
                     FileLog::write('probe', 'bootstrap:reboot', [
                         'run_id' => $id,
                         'ipv4' => $ipv4,
-                        'server_id' => $serverId,
-                        'provider' => (string) ($run['provider'] ?? ''),
+                        'age_s' => $age,
                     ]);
                     return;
                 }
             } catch (\Throwable $e) {
-                fwrite(STDERR, "run #{$id}: probe reboot failed: " . $e->getMessage() . "\n");
-                $meta['probe_reboot'] = 1;
-                $meta['probe_reboot_error'] = mb_substr($e->getMessage(), 0, 200);
-                $this->saveMeta($id, $meta);
+                fwrite(STDERR, "run #{$id}: late reboot failed: " . $e->getMessage() . "\n");
             }
         }
 
-        $timeout = Settings::int('BOOTSTRAP_TIMEOUT_SEC', Env::int('BOOTSTRAP_TIMEOUT_SEC', 600));
-        if ($age > $timeout) {
+        if ($ageSinceReboot !== null && $ageSinceReboot > $waitAfterRebootSec) {
             $run['ipv4'] = $ipv4;
-            $hint = !empty($meta['probe_reboot'])
-                ? 'bootstrap timeout после reboot: '
-                : 'bootstrap timeout: ';
-            // failControl → DESTROYING (если не keep) — очередь пойдёт дальше
-            $this->failControl($run, $hint . $err);
+            $this->failControl($run, "bootstrap timeout после reboot: {$err}");
         }
     }
 
