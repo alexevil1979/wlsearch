@@ -11,13 +11,31 @@ use Wlsearch\Support\View;
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Вход — wlsearch</title>
-    <link rel="stylesheet" href="/assets/app.css">
+    <script>
+    (function () {
+        try {
+            var t = localStorage.getItem('wlsearch-theme') || 'dark';
+            if (['dark', 'light', 'slate'].indexOf(t) < 0) t = 'dark';
+            document.documentElement.setAttribute('data-theme', t);
+        } catch (e) {
+            document.documentElement.setAttribute('data-theme', 'dark');
+        }
+    })();
+    </script>
+    <link rel="stylesheet" href="/assets/app.css?v=5">
 </head>
 <body>
 <div class="login-page">
     <div class="login-box">
         <span class="brand">wlsearch</span>
         <p class="muted" style="text-align:center;margin-top:0">Админка поиска БС-IP</p>
+        <div style="display:flex;justify-content:center;margin:0.75rem 0 1rem">
+            <div class="theme-switch" role="group" aria-label="Тема">
+                <button type="button" data-theme-set="dark" title="Тёмная">Тёмн</button>
+                <button type="button" data-theme-set="light" title="Светлая">Светл</button>
+                <button type="button" data-theme-set="slate" title="Slate">Slate</button>
+            </div>
+        </div>
 
         <?php if (!empty($flash)): ?>
             <div class="flash flash-<?= $flash['type'] === 'error' ? 'error' : 'ok' ?>">
@@ -45,5 +63,27 @@ use Wlsearch\Support\View;
         </form>
     </div>
 </div>
+<script>
+(function () {
+    var key = 'wlsearch-theme';
+    var allowed = { dark: 1, light: 1, slate: 1 };
+    function apply(t) {
+        if (!allowed[t]) t = 'dark';
+        document.documentElement.setAttribute('data-theme', t);
+        try { localStorage.setItem(key, t); } catch (e) {}
+        document.querySelectorAll('[data-theme-set]').forEach(function (btn) {
+            btn.classList.toggle('active', btn.getAttribute('data-theme-set') === t);
+        });
+    }
+    var cur = 'dark';
+    try { cur = localStorage.getItem(key) || 'dark'; } catch (e) {}
+    apply(cur);
+    document.querySelectorAll('[data-theme-set]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            apply(btn.getAttribute('data-theme-set'));
+        });
+    });
+})();
+</script>
 </body>
 </html>
