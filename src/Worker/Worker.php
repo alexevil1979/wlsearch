@@ -476,6 +476,24 @@ final class Worker
         $timeout = Settings::int('BOOTSTRAP_TIMEOUT_SEC', Env::int('BOOTSTRAP_TIMEOUT_SEC', 600));
         $rebootAfterSec = 60; // не ждать 20 минут — reboot через ~1 мин без probe
         $waitAfterRebootSec = min(300, max(120, (int) ($timeout / 2)));
+        // если в meta старый сброшенный bootstrap_at (~now), а сервер старше — берём сервер
+        $serverTs = strtotime((string) ($run['server_created_at'] ?? '')) ?: 0;
+        if ($serverTs > 0 && ($anchor <= 0 || $anchor > $serverTs + 30)) {
+            $anchor = $serverTs;
+            $meta['bootstrap_at'] = $anchor;
+            $this->saveMeta($id, $meta);
+            $age = max(0, time() - $anchor);
+        }
+        FileLog::write('probe', 'bootstrap:tick', [
+            'run_id' => $id,
+            'code' => 'bs3',
+            'ipv4' => $ipv4,
+            'age_s' => $age,
+            'anchor' => $anchor,
+            'server_created_at' => (string) ($run['server_created_at'] ?? ''),
+            'probe_reboot' => !empty($meta['probe_reboot']),
+            'reboot_after_s' => $rebootAfterSec,
+        ]);
 
         // Сначала reboot, если уже долго нет probe (до цикла попыток)
         if (
@@ -629,7 +647,7 @@ final class Worker
                 ? ('после reboot ' . (int) ($ageSinceReboot ?? 0) . 's')
                 : ($ageNow . 's');
             $waitMsg = sprintf(
-                'ожидание probe %s (повтор %d/%d): %s',
+                'bs3 ожидание probe %s (повтор %d/%d): %s',
                 $phase,
                 $i,
                 $attempts,
