@@ -256,7 +256,9 @@ final class Worker
         }
 
         $stmt = $this->pdo->prepare(
-            'UPDATE runs SET provider_server_id = ?, ipv4 = ?, provider_meta = ?, state = ?, error_message = NULL, updated_at = NOW() WHERE id = ?'
+            'UPDATE runs SET provider_server_id = ?, ipv4 = ?, provider_meta = ?, state = ?,
+                    error_message = NULL, server_created_at = COALESCE(server_created_at, NOW()), updated_at = NOW()
+             WHERE id = ?'
         );
         $stmt->execute([$info->id, $info->ipv4, $meta, 'PROVISIONING', $id]);
         fwrite(STDOUT, "run #{$id}: created server {$info->id} status={$info->status} ip=" . ($info->ipv4 ?: '-') . " acc=" . ($accountId ?: '-') . "\n");

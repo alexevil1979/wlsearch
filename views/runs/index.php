@@ -47,6 +47,7 @@ $renderRunRows = static function (array $r, string $csrf, callable $badgeClass, 
     $ctrl = $r['control_ok'] === null ? '—' : ((int) $r['control_ok'] ? '✓' : '✗');
     $bs = $r['bs_ok'] === null ? '—' : ((int) $r['bs_ok'] ? '✓' : '✗');
     $created = $fmtDt(isset($r['created_at']) ? (string) $r['created_at'] : null);
+    $serverCreated = $fmtDt(isset($r['server_created_at']) ? (string) $r['server_created_at'] : null);
     $testedRaw = $r['tested_at'] ?? null;
     if (($testedRaw === null || $testedRaw === '')
         && ($r['bs_ok'] !== null || $r['control_ok'] !== null)
@@ -87,7 +88,8 @@ $renderRunRows = static function (array $r, string $csrf, callable $badgeClass, 
                         <?php else: ?>—<?php endif; ?>
                     </td>
                     <td class="cell-narrow muted"><?= $ctrl ?>/<?= $bs ?></td>
-                    <td class="cell-narrow muted" style="white-space:nowrap;font-size:0.78rem"><?= View::e($created) ?></td>
+                    <td class="cell-narrow muted" style="white-space:nowrap;font-size:0.78rem" title="Поставлено в очередь"><?= View::e($created) ?></td>
+                    <td class="cell-narrow muted" style="white-space:nowrap;font-size:0.78rem" title="VPS создан у провайдера"><?= View::e($serverCreated) ?></td>
                     <td class="cell-narrow muted" style="white-space:nowrap;font-size:0.78rem"><?= View::e($tested) ?></td>
                     <td class="cell-error" title="<?= View::e($err) ?>"><?= View::e($err) ?></td>
                     <td class="cell-actions">
@@ -121,7 +123,7 @@ $renderRunRows = static function (array $r, string $csrf, callable $badgeClass, 
                 </tr>
                 <?php if ($probeHint !== ''): ?>
                 <tr class="<?= View::e($trClass) ?>">
-                    <td colspan="10" style="padding-top:0">
+                    <td colspan="11" style="padding-top:0">
                         <details>
                             <summary class="muted" style="cursor:pointer;font-size:0.85rem">
                                 Probe кривой / 502. Одна команда (nginx) на VPS → потом BS
@@ -167,7 +169,8 @@ $renderRunRows = static function (array $r, string $csrf, callable $badgeClass, 
                 <th>IP</th>
                 <th>ASN</th>
                 <th>ctrl/bs</th>
-                <th>Создан</th>
+                <th>Очередь</th>
+                <th>Сервер</th>
                 <th>Тест</th>
                 <th>Ошибка</th>
                 <th></th>
@@ -194,7 +197,8 @@ $renderRunRows = static function (array $r, string $csrf, callable $badgeClass, 
                 <th>IP</th>
                 <th>ASN</th>
                 <th>ctrl/bs</th>
-                <th>Создан</th>
+                <th>Очередь</th>
+                <th>Сервер</th>
                 <th>Тест</th>
                 <th>Ошибка</th>
                 <th></th>
