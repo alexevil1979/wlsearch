@@ -91,7 +91,7 @@ final class HttpClient
         $opts = [
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_TIMEOUT => $timeout,
-            CURLOPT_CONNECTTIMEOUT => min(5, $timeout),
+            CURLOPT_CONNECTTIMEOUT => min(10, $timeout),
             CURLOPT_FOLLOWLOCATION => true,
             CURLOPT_MAXREDIRS => 2,
             CURLOPT_USERAGENT => 'wlsearch-control-check/1.0',

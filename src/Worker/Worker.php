@@ -445,37 +445,6 @@ final class Worker
             }
         }
 
-        $result = $this->control->check($ipv4);
-        if ($result['ok']) {
-            $this->pdo->prepare(
-                'UPDATE runs SET error_message = NULL WHERE id = ? AND state = \'BOOTSTRAPPING\''
-            )->execute([$id]);
-            $this->setState($id, 'CONTROL_CHECK');
-            fwrite(STDOUT, "run #{$id}: probe responding → CONTROL_CHECK\n");
-            return;
-        }
-
-        // HTTP уже отвечает — для bsbord этого достаточно, чтобы не ждать https/apt лишние минуты
-        $mode = (string) ($run['bs_mode'] ?? 'agent');
-        if (in_array($mode, ['bsbord', 'both'], true)) {
-            $httpOnly = $this->control->checkHttp($ipv4);
-            if ($httpOnly['ok']) {
-                $this->pdo->prepare(
-                    'UPDATE runs SET error_message = NULL WHERE id = ? AND state = \'BOOTSTRAPPING\''
-                )->execute([$id]);
-                $this->setState($id, 'CONTROL_CHECK');
-                fwrite(STDOUT, "run #{$id}: http probe OK (bsbord) → CONTROL_CHECK\n");
-                return;
-            }
-        }
-
-        $age = $this->updatedAgeSeconds($run);
-        $err = (string) ($result['error'] ?? 'no probe');
-        $waitMsg = 'ожидание probe ' . $age . 's: ' . $err;
-        $this->pdo->prepare(
-            'UPDATE runs SET error_message = ? WHERE id = ? AND state = \'BOOTSTRAPPING\''
-        )->execute([mb_substr($waitMsg, 0, 500), $id]);
-
         $meta = [];
         if (!empty($run['provider_meta'])) {
             $decoded = json_decode((string) $run['provider_meta'], true);
@@ -483,6 +452,64 @@ final class Worker
                 $meta = $decoded;
             }
         }
+        if (empty($meta['bootstrap_at'])) {
+            $meta['bootstrap_at'] = time();
+            $this->saveMeta($id, $meta);
+        }
+        $bootstrapAt = (int) $meta['bootstrap_at'];
+
+        $attempts = 5;
+        $sleepSec = 8;
+        $lastErr = 'no probe';
+        $mode = (string) ($run['bs_mode'] ?? 'agent');
+
+        for ($i = 1; $i <= $attempts; $i++) {
+            $age = max(0, time() - $bootstrapAt);
+            $result = $this->control->check($ipv4);
+            if ($result['ok']) {
+                $this->pdo->prepare(
+                    'UPDATE runs SET error_message = NULL WHERE id = ? AND state = \'BOOTSTRAPPING\''
+                )->execute([$id]);
+                $this->setState($id, 'CONTROL_CHECK');
+                fwrite(STDOUT, "run #{$id}: probe responding → CONTROL_CHECK\n");
+                return;
+            }
+
+            // HTTP уже отвечает — для bsbord этого достаточно
+            if (in_array($mode, ['bsbord', 'both'], true)) {
+                $httpOnly = $this->control->checkHttp($ipv4);
+                if ($httpOnly['ok']) {
+                    $this->pdo->prepare(
+                        'UPDATE runs SET error_message = NULL WHERE id = ? AND state = \'BOOTSTRAPPING\''
+                    )->execute([$id]);
+                    $this->setState($id, 'CONTROL_CHECK');
+                    fwrite(STDOUT, "run #{$id}: http probe OK (bsbord) → CONTROL_CHECK\n");
+                    return;
+                }
+                $lastErr = (string) ($httpOnly['error'] ?? $result['error'] ?? 'no probe');
+            } else {
+                $lastErr = (string) ($result['error'] ?? 'no probe');
+            }
+
+            $waitMsg = sprintf(
+                'ожидание probe %ds (повтор %d/%d): %s',
+                $age,
+                $i,
+                $attempts,
+                $lastErr
+            );
+            $this->pdo->prepare(
+                'UPDATE runs SET error_message = ? WHERE id = ? AND state = \'BOOTSTRAPPING\''
+            )->execute([mb_substr($waitMsg, 0, 500), $id]);
+            fwrite(STDOUT, "run #{$id}: {$waitMsg}\n");
+
+            if ($i < $attempts) {
+                sleep($sleepSec);
+            }
+        }
+
+        $age = max(0, time() - $bootstrapAt);
+        $err = $lastErr;
 
         // Снаружи timeout при живом localhost → облачный Firewall Timeweb (whitelist)
         $looksBlocked = str_contains(strtolower($err), 'timed out')
@@ -502,10 +529,10 @@ final class Worker
                     $detached = $provider->detachCloudFirewall($serverId);
                     $meta['firewall_detach_tried'] = 1;
                     $meta['firewall_detached'] = $detached;
+                    $this->saveMeta($id, $meta);
                     $this->pdo->prepare(
-                        'UPDATE runs SET provider_meta = ?, error_message = ? WHERE id = ?'
+                        'UPDATE runs SET error_message = ? WHERE id = ?'
                     )->execute([
-                        json_encode($meta, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
                         mb_substr(
                             'снял cloud firewall (' . count($detached) . ' групп), жду probe: ' . $err,
                             0,
@@ -531,10 +558,10 @@ final class Worker
                         $provider->repushCloudInitAndReboot($serverId, $script);
                         $meta['probe_repush'] = 1;
                         $meta['probe_repush_at'] = date('c');
+                        $this->saveMeta($id, $meta);
                         $this->pdo->prepare(
-                            'UPDATE runs SET provider_meta = ?, error_message = ? WHERE id = ?'
+                            'UPDATE runs SET error_message = ? WHERE id = ?'
                         )->execute([
-                            json_encode($meta, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
                             mb_substr('cloud-init не ответил — перезалил user-data + reboot, жду probe', 0, 500),
                             $id,
                         ]);
@@ -548,6 +575,7 @@ final class Worker
 
         $timeout = Settings::int('BOOTSTRAP_TIMEOUT_SEC', Env::int('BOOTSTRAP_TIMEOUT_SEC', 600));
         if ($age > $timeout) {
+            $run['ipv4'] = $ipv4;
             $this->failControl($run, 'bootstrap timeout: ' . $err);
         }
     }
@@ -684,7 +712,8 @@ final class Worker
     /** @param array<string, mixed> $meta */
     private function saveMeta(int $id, array $meta): void
     {
-        $stmt = $this->pdo->prepare('UPDATE runs SET provider_meta = ?, updated_at = NOW() WHERE id = ?');
+        // без updated_at — иначе age bootstrap сбрасывается и timeout/retry логика ломается
+        $stmt = $this->pdo->prepare('UPDATE runs SET provider_meta = ? WHERE id = ?');
         $stmt->execute([json_encode($meta, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), $id]);
     }
 
