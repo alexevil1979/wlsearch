@@ -14,6 +14,12 @@ chmod 644 /var/www/html/index.html
 (command -v fuser >/dev/null 2>&1 && fuser -k 80/tcp 443/tcp) || true
 systemctl stop nginx 2>/dev/null || true
 pkill -f wlsearch-probe.py 2>/dev/null || true
+if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi 'Status: active'; then
+  ufw allow 80/tcp || true
+  ufw allow 443/tcp || true
+fi
+iptables -C INPUT -p tcp --dport 80 -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport 80 -j ACCEPT || true
+iptables -C INPUT -p tcp --dport 443 -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport 443 -j ACCEPT || true
 cat > /usr/local/bin/wlsearch-probe.py <<'PY'
 #!/usr/bin/env python3
 import http.server, ssl, threading, pathlib, subprocess, os, sys

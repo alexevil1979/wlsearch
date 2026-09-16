@@ -44,9 +44,17 @@ chmod +x /usr/local/bin/wlsearch-probe.py
 (command -v fuser >/dev/null 2>&1 && fuser -k 80/tcp 443/tcp) || true
 systemctl stop nginx 2>/dev/null || service nginx stop 2>/dev/null || true
 pkill -f '/usr/local/bin/wlsearch-probe.py' 2>/dev/null || true
+# наружу часто режет ufw/iptables — локальный curl 127.0.0.1 проходит, браузер с интернета нет
+if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi 'Status: active'; then
+  ufw allow 80/tcp || true
+  ufw allow 443/tcp || true
+fi
+iptables -C INPUT -p tcp --dport 80 -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport 80 -j ACCEPT || true
+iptables -C INPUT -p tcp --dport 443 -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport 443 -j ACCEPT || true
 nohup env WLSEARCH_IP="\$IP" python3 /usr/local/bin/wlsearch-probe.py >>/var/log/wlsearch-probe.log 2>&1 &
 sleep 1
 echo "wlsearch-cloud-init done IP=\$IP \$(date -u -Iseconds)"
+ss -lntp 2>/dev/null | grep -E ':80|:443' || netstat -lntp 2>/dev/null | grep -E ':80|:443' || true
 curl -sS -m 2 http://127.0.0.1/ | head -c 120 || true
 echo
 SH;
@@ -99,19 +107,25 @@ class H(http.server.BaseHTTPRequestHandler):
 
 def serve(port: int, tls: bool = False) -> None:
     httpd = http.server.HTTPServer(("0.0.0.0", port), H)
+    httpd.allow_reuse_address = True
     if tls:
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         ctx.load_cert_chain(str(CRT), str(KEY))
         httpd.socket = ctx.wrap_socket(httpd.socket, server_side=True)
+    sys.stderr.write(f"wlsearch-probe listen {'https' if tls else 'http'} 0.0.0.0:{port}\\n")
     httpd.serve_forever()
 
 def main() -> int:
     cn = os.environ.get("WLSEARCH_IP", "wlsearch")
+    # HTTP обязателен; HTTPS — для bsbord
     threading.Thread(target=serve, args=(80, False), daemon=True).start()
     if ensure_cert(cn):
-        threading.Thread(target=serve, args=(443, True), daemon=True).start()
+        try:
+            threading.Thread(target=serve, args=(443, True), daemon=True).start()
+        except Exception as e:
+            sys.stderr.write(f"wlsearch-probe: https failed: {e}\\n")
     else:
-        sys.stderr.write("wlsearch-probe: https skipped (no cert)\n")
+        sys.stderr.write("wlsearch-probe: https skipped (no cert)\\n")
     threading.Event().wait()
     return 0
 
