@@ -374,7 +374,15 @@ final class Worker
                     'UPDATE runs SET ipv4 = ?, asn = ?, asn_org = ? WHERE id = ?'
                 );
                 $stmt->execute([$info->ipv4, $asn, $asnOrg !== null ? mb_substr($asnOrg, 0, 128) : null, $id]);
-                fwrite(STDOUT, "run #{$id}: known IP {$info->ipv4} → destroy ({$known})\n");
+                $run['ipv4'] = $info->ipv4;
+                $run['asn'] = $asn;
+                $run['asn_org'] = $asnOrg !== null ? mb_substr($asnOrg, 0, 128) : null;
+                fwrite(STDOUT, "run #{$id}: known/subnet {$info->ipv4} → skip ({$known})\n");
+                // /24 или точный fail_bs — сразу FAIL_BS + destroy
+                if (str_starts_with($known, 'fail_bs_subnet') || str_starts_with($known, 'known_fail_bs')) {
+                    $this->failBs($run, $known);
+                    return;
+                }
                 $this->failRun($id, 'ERROR', 'known IP skip: ' . $known);
                 return;
             }

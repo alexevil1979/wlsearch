@@ -50,10 +50,53 @@ final class CheckedIpService
     public function shouldDestroyImmediately(string $ipv4): ?string
     {
         $hit = $this->lookup($ipv4);
-        if ($hit === null) {
+        if ($hit !== null) {
+            return (string) $hit['reason'];
+        }
+        return $this->failedBsSame24Reason($ipv4);
+    }
+
+    /**
+     * Если в той же /24 (первые 3 октета) уже был FAIL_BS — сразу не ок.
+     * Пример: 185.119.58.249 fail → 185.119.58.135 тоже fail.
+     */
+    public function failedBsSame24Reason(string $ipv4): ?string
+    {
+        if (!filter_var($ipv4, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
             return null;
         }
-        return (string) $hit['reason'];
+        $parts = explode('.', $ipv4);
+        if (count($parts) !== 4) {
+            return null;
+        }
+        $net24 = $parts[0] . '.' . $parts[1] . '.' . $parts[2];
+        $like = $net24 . '.%';
+
+        $stmt = $this->pdo->prepare(
+            "SELECT ipv4, detail FROM checked_ips
+             WHERE ipv4 LIKE ? AND ipv4 != ? AND verdict = 'fail_bs'
+             ORDER BY checked_at DESC LIMIT 1"
+        );
+        $stmt->execute([$like, $ipv4]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (is_array($row) && !empty($row['ipv4'])) {
+            return 'fail_bs_subnet /24 ' . $net24 . ' (как ' . $row['ipv4'] . ')';
+        }
+
+        // запасной поиск по runs (если checked_ips ещё не успел)
+        $stmt2 = $this->pdo->prepare(
+            "SELECT ipv4 FROM runs
+             WHERE ipv4 LIKE ? AND ipv4 != ?
+               AND (state = 'FAIL_BS' OR verdict = 'FAIL_BS')
+             ORDER BY id DESC LIMIT 1"
+        );
+        $stmt2->execute([$like, $ipv4]);
+        $prev = $stmt2->fetchColumn();
+        if (is_string($prev) && $prev !== '') {
+            return 'fail_bs_subnet /24 ' . $net24 . ' (как ' . $prev . ')';
+        }
+
+        return null;
     }
 
     public function record(
