@@ -34,11 +34,12 @@ Docs: https://docs.selectel.ru/cloud-servers/
 
 ## Probe
 
-Timeweb: в `cloud_init` уходит **`#!/bin/sh`** → **nginx :80+:443** (self-signed),
-тело `WL_PROBE_OK <provider> run_<id> <ip> <ts>`.
-(Раньше python http.server — снаружи часто 502 при живом localhost.)
-Если за ~90с probe не отвечает — worker один раз PATCH cloud_init + reboot.
-Ручной one-liner: `CloudInitBuilder::oneLiner($provider, $runId)`.
+## Probe
+
+Timeweb `cloud_init` = `#!/bin/sh`:
+1. **сразу** `ufw disable` + python3 probe :80/:443 (без apt — иначе boot висит на зеркале)
+2. nginx-light опционально **в фоне**
+Ручной: `scripts/install-probe.sh <runId> timeweb` или one-liner в UI.
 Selectel: тот же скрипт в Nova `user_data` (base64).
 
 ## ASN
