@@ -22,14 +22,9 @@ final class ControlChecker
      */
     public function check(string $ipv4, string $marker = 'WL_PROBE_OK'): array
     {
-        $http = $this->probeOne('http://' . $ipv4 . '/', $marker);
+        $http = $this->checkHttp($ipv4, $marker);
         if (!$http['ok']) {
-            return [
-                'ok' => false,
-                'status' => $http['status'],
-                'body_snippet' => $http['body_snippet'],
-                'error' => 'http: ' . ($http['error'] ?? 'fail'),
-            ];
+            return $http;
         }
 
         $https = $this->probeOne('https://' . $ipv4 . '/', $marker);
@@ -46,6 +41,30 @@ final class ControlChecker
             'ok' => true,
             'status' => $https['status'],
             'body_snippet' => 'http+https OK ' . mb_substr($https['body_snippet'], 0, 200),
+            'error' => null,
+        ];
+    }
+
+    /**
+     * HTTP :80 only (достаточно для перехода к bsbord, пока поднимается HTTPS).
+     *
+     * @return array{ok:bool, status:int, body_snippet:string, error:?string}
+     */
+    public function checkHttp(string $ipv4, string $marker = 'WL_PROBE_OK'): array
+    {
+        $http = $this->probeOne('http://' . $ipv4 . '/', $marker);
+        if (!$http['ok']) {
+            return [
+                'ok' => false,
+                'status' => $http['status'],
+                'body_snippet' => $http['body_snippet'],
+                'error' => 'http: ' . ($http['error'] ?? 'fail'),
+            ];
+        }
+        return [
+            'ok' => true,
+            'status' => $http['status'],
+            'body_snippet' => 'http OK ' . mb_substr($http['body_snippet'], 0, 200),
             'error' => null,
         ];
     }

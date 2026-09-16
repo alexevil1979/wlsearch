@@ -415,13 +415,36 @@ final class Worker
 
         $result = $this->control->check($ipv4);
         if ($result['ok']) {
+            $this->pdo->prepare(
+                'UPDATE runs SET error_message = NULL WHERE id = ? AND state = \'BOOTSTRAPPING\''
+            )->execute([$id]);
             $this->setState($id, 'CONTROL_CHECK');
             fwrite(STDOUT, "run #{$id}: probe responding → CONTROL_CHECK\n");
             return;
         }
 
-        $timeout = Settings::int('BOOTSTRAP_TIMEOUT_SEC', Env::int('BOOTSTRAP_TIMEOUT_SEC', 900));
-        if ($this->updatedAgeSeconds($run) > $timeout) {
+        // HTTP уже отвечает — для bsbord этого достаточно, чтобы не ждать https/apt лишние минуты
+        $mode = (string) ($run['bs_mode'] ?? 'agent');
+        if (in_array($mode, ['bsbord', 'both'], true)) {
+            $httpOnly = $this->control->checkHttp($ipv4);
+            if ($httpOnly['ok']) {
+                $this->pdo->prepare(
+                    'UPDATE runs SET error_message = NULL WHERE id = ? AND state = \'BOOTSTRAPPING\''
+                )->execute([$id]);
+                $this->setState($id, 'CONTROL_CHECK');
+                fwrite(STDOUT, "run #{$id}: http probe OK (bsbord) → CONTROL_CHECK\n");
+                return;
+            }
+        }
+
+        $age = $this->updatedAgeSeconds($run);
+        $waitMsg = 'ожидание probe ' . $age . 'с: ' . ($result['error'] ?? 'no probe');
+        $this->pdo->prepare(
+            'UPDATE runs SET error_message = ? WHERE id = ? AND state = \'BOOTSTRAPPING\''
+        )->execute([mb_substr($waitMsg, 0, 500), $id]);
+
+        $timeout = Settings::int('BOOTSTRAP_TIMEOUT_SEC', Env::int('BOOTSTRAP_TIMEOUT_SEC', 600));
+        if ($age > $timeout) {
             $this->failControl($run, 'bootstrap timeout: ' . ($result['error'] ?? 'no probe'));
         }
     }
@@ -437,12 +460,16 @@ final class Worker
         }
 
         $result = $this->control->check($ipv4);
+        $mode = (string) ($run['bs_mode'] ?? 'agent');
+        // bsbord сам бьёт http/https — control с панели достаточно по HTTP
+        if (!$result['ok'] && in_array($mode, ['bsbord', 'both'], true)) {
+            $result = $this->control->checkHttp($ipv4);
+        }
         if ($result['ok']) {
             $stmt = $this->pdo->prepare(
                 'UPDATE runs SET control_ok = 1, state = ?, error_message = NULL, updated_at = NOW() WHERE id = ?'
             );
             $stmt->execute(['BS_CHECK', $id]);
-            $mode = (string) ($run['bs_mode'] ?? 'agent');
             if (in_array($mode, ['agent', 'both'], true)) {
                 $this->tasks->ensureTaskForRun($id, $ipv4);
             }
