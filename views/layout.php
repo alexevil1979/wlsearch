@@ -41,6 +41,7 @@ $nav = $nav ?? '';
         <a href="/settings" class="<?= $nav === 'settings' ? 'active' : '' ?>">Настройки</a>
         <a href="/logs" class="<?= $nav === 'logs' ? 'active' : '' ?>">Логи</a>
         <a href="/blacklist" class="<?= $nav === 'blacklist' ? 'active' : '' ?>">Blacklist</a>
+        <a href="/favorites" class="<?= $nav === 'favorites' ? 'active' : '' ?>">Избранные</a>
     </nav>
     <div class="topbar-user">
         <div class="theme-switch" role="group" aria-label="Тема">

@@ -7,6 +7,7 @@ namespace Wlsearch\Worker;
 use PDO;
 use Wlsearch\Blacklist\BlacklistService;
 use Wlsearch\CheckedIp\CheckedIpService;
+use Wlsearch\FavoriteSubnet\FavoriteSubnetService;
 use Wlsearch\Inventory\InventoryService;
 use Wlsearch\Notify\TelegramNotifier;
 use Wlsearch\Probe\BsbordClient;
@@ -30,6 +31,7 @@ final class Worker
     private TelegramNotifier $tg;
     private TaskService $tasks;
     private BlacklistService $blacklist;
+    private FavoriteSubnetService $favorites;
     private BsbordClient $bsbord;
     private InventoryService $inventory;
     private CheckedIpService $checkedIps;
@@ -41,6 +43,7 @@ final class Worker
         ?TelegramNotifier $tg = null,
         ?TaskService $tasks = null,
         ?BlacklistService $blacklist = null,
+        ?FavoriteSubnetService $favorites = null,
         ?BsbordClient $bsbord = null,
         ?InventoryService $inventory = null,
         ?CheckedIpService $checkedIps = null,
@@ -51,6 +54,7 @@ final class Worker
         $this->tg = $tg ?? new TelegramNotifier();
         $this->tasks = $tasks ?? new TaskService($this->pdo);
         $this->blacklist = $blacklist ?? new BlacklistService($this->pdo);
+        $this->favorites = $favorites ?? new FavoriteSubnetService($this->pdo);
         $this->bsbord = $bsbord ?? new BsbordClient();
         $this->inventory = $inventory ?? new InventoryService($this->pdo);
         $this->checkedIps = $checkedIps ?? new CheckedIpService($this->pdo);
@@ -352,6 +356,19 @@ final class Worker
             $lookup = AsnLookup::lookup($info->ipv4);
             $asn = $lookup['asn'];
             $asnOrg = $lookup['org'];
+
+            $fav = $this->favorites->matchIp($info->ipv4);
+            if ($fav !== null) {
+                fwrite(STDOUT, "run #{$id}: FAVORITE subnet {$fav['cidr']} ip={$info->ipv4} → STOP\n");
+                $this->runs->hitFavoriteSubnet(
+                    $id,
+                    $info->ipv4,
+                    $fav,
+                    $asn,
+                    $asnOrg !== null ? mb_substr($asnOrg, 0, 128) : null
+                );
+                return;
+            }
 
             $bl = $this->blacklist->checkIp($info->ipv4, $asn);
             if ($bl['blocked']) {

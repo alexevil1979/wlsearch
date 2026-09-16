@@ -13,6 +13,7 @@ use Wlsearch\Http\Controllers\BlacklistController;
 use Wlsearch\Http\Controllers\CheckedIpsController;
 use Wlsearch\Http\Controllers\DashboardController;
 use Wlsearch\Http\Controllers\DevicesController;
+use Wlsearch\Http\Controllers\FavoriteSubnetsController;
 use Wlsearch\Http\Controllers\HealthController;
 use Wlsearch\Http\Controllers\InventoryController;
 use Wlsearch\Http\Controllers\RunsController;
@@ -50,6 +51,7 @@ final class Kernel
         $settings = new SettingsController();
         $accounts = new AccountsController();
         $blacklist = new BlacklistController();
+        $favorites = new FavoriteSubnetsController();
         $audit = new AuditController();
         $agent = new AgentController();
 
@@ -103,6 +105,10 @@ final class Kernel
         $router->get('/blacklist', [$blacklist, 'index']);
         $router->post('/blacklist', [$blacklist, 'create']);
         $router->post('/blacklist/{id}/delete', [$blacklist, 'delete']);
+
+        $router->get('/favorites', [$favorites, 'index']);
+        $router->post('/favorites', [$favorites, 'create']);
+        $router->post('/favorites/{id}/delete', [$favorites, 'delete']);
 
         $router->get('/api/v1/agent/tasks/next', [$agent, 'nextTask']);
         $router->post('/api/v1/agent/tasks/{id}/result', [$agent, 'result']);

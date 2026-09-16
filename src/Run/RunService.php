@@ -321,33 +321,95 @@ final class RunService
      * Остановить очередь: ORDERING→SKIPPED; живые в работе→KEEP (без destroy).
      * @return array{skipped:int,kept:int}
      */
-    public function stopAllQueued(string $actor): array
+    public function stopAllQueued(string $actor, ?string $reason = null, bool $notify = true): array
     {
+        $reason = $reason !== null && trim($reason) !== '' ? trim($reason) : 'остановлено вручную';
+        $skipMsg = mb_substr($reason, 0, 500);
+        $keepMsg = mb_substr($reason . ' (VPS сохранён)', 0, 500);
+
         $skip = $this->pdo->prepare(
             "UPDATE runs SET state = 'SKIPPED', verdict = 'SKIPPED',
-                    error_message = 'остановлено вручную', updated_at = NOW()
+                    error_message = ?, updated_at = NOW()
              WHERE state = 'ORDERING'
                 OR (state = 'ERROR' AND provider_server_id IS NULL AND destroyed_at IS NULL
                     AND (error_message LIKE 'ожидание запаса%' OR error_message LIKE 'нет запаса%' OR error_message LIKE 'Риск no_paid%'))"
         );
-        $skip->execute();
+        $skip->execute([$skipMsg]);
         $skipped = $skip->rowCount();
 
         $keep = $this->pdo->prepare(
             "UPDATE runs SET state = 'KEEP', verdict = 'KEEP', keep_on_fail = 1,
-                    error_message = 'остановлено вручную (VPS сохранён)', updated_at = NOW()
+                    error_message = ?, updated_at = NOW()
              WHERE state IN ('PROVISIONING','BOOTSTRAPPING','CONTROL_CHECK','BS_CHECK')"
         );
-        $keep->execute();
+        $keep->execute([$keepMsg]);
         $kept = $keep->rowCount();
 
         Audit::log($actor, 'run.stop_all', 'runs', null, [
             'skipped' => $skipped,
             'kept' => $kept,
+            'reason' => $reason,
         ]);
-        $this->tg->send("wlsearch: STOP очередь — skipped={$skipped} kept={$kept} (без destroy)");
+        if ($notify) {
+            $this->tg->send("wlsearch: STOP очередь — skipped={$skipped} kept={$kept} (без destroy) — {$reason}");
+        }
 
         return ['skipped' => $skipped, 'kept' => $kept];
+    }
+
+    /**
+     * IP попал в избранную подсеть: KEEP этого run, полная остановка очереди, Telegram.
+     *
+     * @param array{cidr:string, note:?string} $match
+     */
+    public function hitFavoriteSubnet(int $runId, string $ipv4, array $match, ?int $asn = null, ?string $asnOrg = null): void
+    {
+        $cidr = (string) ($match['cidr'] ?? '');
+        $note = $match['note'] ?? null;
+        $hitMsg = 'избранная подсеть попалась: ' . $cidr . ' ip=' . $ipv4
+            . ($note !== null && $note !== '' ? ' (' . $note . ')' : '');
+
+        $upd = $this->pdo->prepare(
+            "UPDATE runs SET ipv4 = ?, asn = ?, asn_org = ?,
+                    state = 'KEEP', verdict = 'KEEP', keep_on_fail = 1,
+                    error_message = ?, updated_at = NOW()
+             WHERE id = ?"
+        );
+        $upd->execute([
+            $ipv4,
+            $asn,
+            $asnOrg !== null ? mb_substr($asnOrg, 0, 128) : null,
+            mb_substr($hitMsg, 0, 500),
+            $runId,
+        ]);
+
+        $stop = $this->stopAllQueued(
+            'worker',
+            'остановка: избранная подсеть попалась',
+            false
+        );
+
+        // stopAllQueued мог перезаписать error_message этого run — вернём hit-текст
+        $this->pdo->prepare(
+            "UPDATE runs SET state = 'KEEP', verdict = 'KEEP', keep_on_fail = 1,
+                    error_message = ?, updated_at = NOW()
+             WHERE id = ?"
+        )->execute([mb_substr($hitMsg, 0, 500), $runId]);
+
+        Audit::log('worker', 'run.favorite_subnet', 'run', (string) $runId, [
+            'ipv4' => $ipv4,
+            'cidr' => $cidr,
+            'note' => $note,
+            'skipped' => $stop['skipped'],
+            'kept' => $stop['kept'],
+        ]);
+
+        $this->tg->send(
+            "wlsearch: избранная подсеть попалась!\n"
+            . "run #{$runId} ip={$ipv4} cidr={$cidr}"
+            . ($note !== null && $note !== '' ? " — {$note}" : '')
+            . "\nочередь остановлена: skipped={$stop['skipped']} kept={$stop['kept']} (VPS сохранён)"
+        );
     }
 
     public function requestDestroy(int $runId, string $actor): void
