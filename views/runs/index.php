@@ -78,6 +78,9 @@ $renderRunRows = static function (array $r, string $csrf, callable $badgeClass, 
                     <td class="cell-narrow">
                         <?php if (!empty($r['ipv4'])): ?>
                             <code><?= View::e((string) $r['ipv4']) ?></code>
+                            <button type="button" class="btn btn-secondary btn-sm"
+                                    title="Копировать IP"
+                                    onclick="navigator.clipboard.writeText(<?= json_encode((string) $r['ipv4'], JSON_UNESCAPED_UNICODE) ?>).then(function(){var b=this;b.textContent='ok';setTimeout(function(){b.textContent='copy'},800)}.bind(this)).catch(function(){})">copy</button>
                         <?php else: ?>
                             <span class="muted">—</span>
                         <?php endif; ?>
