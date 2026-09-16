@@ -216,13 +216,19 @@ final class Worker
                     fwrite(STDOUT, "run #{$id}: пробуем acc #{$accountId}\n");
                     continue;
                 }
-                // Нет другого аккаунта с запасом — сразу SKIPPED (не висеть вечно)
-                $msg = 'нет запаса ни на одном аккаунте: ' . $e->getMessage();
+                // Ждём пополнения: ORDERING остаётся, лимит IP не тратится (ipv4 пустой)
+                $createdAge = max(0, time() - (strtotime((string) ($run['created_at'] ?? 'now')) ?: time()));
+                $msg = 'ожидание запаса (пополните аккаунт или включите другой): ' . $e->getMessage();
+                // не трогаем updated_at — иначе вечное ожидание
                 $this->pdo->prepare(
-                    "UPDATE runs SET state = 'SKIPPED', verdict = 'SKIPPED', error_message = ?, updated_at = NOW() WHERE id = ?"
+                    'UPDATE runs SET error_message = ? WHERE id = ? AND state = \'ORDERING\''
                 )->execute([mb_substr($msg, 0, 2000), $id]);
-                fwrite(STDOUT, "run #{$id}: SKIPPED — {$msg}\n");
-                $this->tg->send("wlsearch: SKIPPED run #{$id} — недостаточно запаса Timeweb");
+                if ($createdAge > 21600) { // 6 часов
+                    $this->pdo->prepare(
+                        "UPDATE runs SET state = 'SKIPPED', verdict = 'SKIPPED', error_message = ?, updated_at = NOW() WHERE id = ?"
+                    )->execute([mb_substr('таймаут ожидания запаса: ' . $e->getMessage(), 0, 2000), $id]);
+                    fwrite(STDOUT, "run #{$id}: SKIPPED после 6ч без запаса\n");
+                }
                 return;
             } catch (\Throwable $e) {
                 if ($accountId > 0) {
@@ -233,10 +239,11 @@ final class Worker
         }
 
         if ($lastBalanceErr !== null || !isset($info)) {
-            $msg = 'нет запаса ни на одном аккаунте'
+            // Все аккаунты без запаса в этой попытке — остаёмся в ORDERING
+            $msg = 'ожидание запаса (пополните или включите другой аккаунт)'
                 . ($lastBalanceErr ? (': ' . $lastBalanceErr->getMessage()) : '');
             $this->pdo->prepare(
-                "UPDATE runs SET state = 'SKIPPED', verdict = 'SKIPPED', error_message = ?, updated_at = NOW() WHERE id = ?"
+                'UPDATE runs SET error_message = ? WHERE id = ? AND state = \'ORDERING\''
             )->execute([mb_substr($msg, 0, 2000), $id]);
             return;
         }
@@ -525,7 +532,7 @@ final class Worker
             $ops = $result['operators'] !== [] ? implode(',', $result['operators']) : 'bsbord';
             $stmt = $this->pdo->prepare(
                 "UPDATE runs SET bs_ok = 1, cellular_ok = 1, bs_source = 'bsbord', state = 'PASS', verdict = 'PASS',
-                        error_message = ?, updated_at = NOW() WHERE id = ?"
+                        error_message = ?, tested_at = NOW(), updated_at = NOW() WHERE id = ?"
             );
             $stmt->execute([mb_substr($result['detail'], 0, 2000), $id]);
 
@@ -575,7 +582,7 @@ final class Worker
         $id = (int) $run['id'];
         $stmt = $this->pdo->prepare(
             "UPDATE runs SET bs_ok = 0, bs_source = 'bsbord', state = 'FAIL_BS', verdict = 'FAIL_BS',
-                    error_message = ?, updated_at = NOW() WHERE id = ?"
+                    error_message = ?, tested_at = NOW(), updated_at = NOW() WHERE id = ?"
         );
         $stmt->execute([mb_substr($message, 0, 2000), $id]);
         $this->tg->send("wlsearch: FAIL_BS (bsbord) run #{$id} — {$message}");
@@ -626,7 +633,7 @@ final class Worker
     {
         $id = (int) $run['id'];
         $stmt = $this->pdo->prepare(
-            'UPDATE runs SET control_ok = 0, state = ?, verdict = ?, error_message = ?, updated_at = NOW() WHERE id = ?'
+            'UPDATE runs SET control_ok = 0, state = ?, verdict = ?, error_message = ?, tested_at = NOW(), updated_at = NOW() WHERE id = ?'
         );
         $stmt->execute(['FAIL_CONTROL', 'FAIL_CONTROL', mb_substr($message, 0, 2000), $id]);
         $this->tg->send("wlsearch: FAIL_CONTROL run #{$id} ip=" . ($run['ipv4'] ?? '-') . ' — ' . $message);

@@ -44,7 +44,7 @@ final class DashboardController
                     "SELECT COUNT(*) FROM devices WHERE revoked_at IS NULL AND last_seen_at >= (NOW() - INTERVAL 2 MINUTE)"
                 )->fetchColumn();
                 $stats['creates_today'] = (int) $pdo->query(
-                    "SELECT COUNT(*) FROM runs WHERE DATE(created_at) = CURDATE()"
+                    "SELECT COUNT(*) FROM runs WHERE DATE(created_at) = CURDATE() AND ipv4 IS NOT NULL AND ipv4 != ''"
                 )->fetchColumn();
             } catch (\Throwable) {
                 // Tables may be empty / not migrated yet — keep zeros.

@@ -22,6 +22,7 @@ $dailyCapacity = (int) ($dailyCapacity ?? 0);
 $createsPerAccount = (int) ($createsPerAccount ?? 10);
 $enabledAccountCount = (int) ($enabledAccountCount ?? 0);
 $maxParallel = max(1, (int) ($maxParallel ?? 1));
+$accountUsage = $accountUsage ?? [];
 $defaultCount = max(1, min(10, $dailyCapacity > 0 ? $dailyCapacity : 1));
 ?>
 <h1>Запуск прогона</h1>
@@ -106,20 +107,20 @@ $defaultCount = max(1, min(10, $dailyCapacity > 0 ? $dailyCapacity : 1));
                value="<?= (int) $defaultCount ?>" required>
         <p class="muted">
             Сегодня осталось ≈ <strong><?= (int) $dailyCapacity ?></strong>
-            (лимит <?= (int) $createsPerAccount ?> VPS/сутки на аккаунт; считаются только реально созданные серверы, не SKIPPED).
+            (лимит <?= (int) $createsPerAccount ?> IP/сутки на аккаунт; в лимите только выданные IPv4, попытки без IP не считаются).
             Параллельно живых VM: <?= (int) $maxParallel ?>.
         </p>
         <?php if (!empty($accountUsage)): ?>
             <p class="muted" style="margin-top:0.35rem">
                 <?php foreach ($accountUsage as $aid => $u): ?>
-                    #<?= (int) $aid ?>: использовано <?= (int) $u['used'] ?>/<?= (int) $createsPerAccount ?>
+                    #<?= (int) $aid ?>: выдано <?= (int) $u['used'] ?>/<?= (int) $createsPerAccount ?>
                     (осталось <?= (int) $u['left'] ?>)<?= $aid !== array_key_last($accountUsage) ? '; ' : '' ?>
                 <?php endforeach; ?>
             </p>
         <?php endif; ?>
         <?php if ($dailyCapacity <= 0): ?>
             <div class="flash flash-error" style="margin-top:0.75rem">
-                Лимит VPS на сегодня исчерпан для включённых аккаунтов (или баланс &lt; ~880 ₽).
+                Лимит выданных IP на сегодня исчерпан для включённых аккаунтов (или баланс &lt; ~880 ₽).
                 Включите другой аккаунт в <a href="/accounts">Аккаунты</a>, пополните баланс, либо дождитесь завтра.
             </div>
         <?php endif; ?>

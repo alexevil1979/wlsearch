@@ -28,7 +28,7 @@ use Wlsearch\Support\View;
         <div class="value"><?= (int) $stats['online_agents'] ?></div>
     </div>
     <div class="stat">
-        <div class="label">Create сегодня</div>
+        <div class="label">IP выдано сегодня</div>
         <div class="value"><?= (int) $stats['creates_today'] ?> / <?= (int) $stats['max_creates'] ?></div>
     </div>
     <div class="stat">

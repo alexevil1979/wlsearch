@@ -12,6 +12,13 @@ $badgeClass = static function (string $state): string {
         default => '',
     };
 };
+$fmtDt = static function (?string $dt): string {
+    if ($dt === null || $dt === '') {
+        return '—';
+    }
+    $t = strtotime($dt);
+    return $t !== false ? date('d.m.Y H:i', $t) : $dt;
+};
 ?>
 <div class="page-head">
     <div>
@@ -43,6 +50,8 @@ $badgeClass = static function (string $state): string {
                 <th>IP</th>
                 <th>ASN</th>
                 <th>ctrl/bs</th>
+                <th>Создан</th>
+                <th>Тест</th>
                 <th>Ошибка</th>
                 <th></th>
             </tr>
@@ -66,6 +75,15 @@ $badgeClass = static function (string $state): string {
                 }
                 $ctrl = $r['control_ok'] === null ? '—' : ((int) $r['control_ok'] ? '✓' : '✗');
                 $bs = $r['bs_ok'] === null ? '—' : ((int) $r['bs_ok'] ? '✓' : '✗');
+                $created = $fmtDt(isset($r['created_at']) ? (string) $r['created_at'] : null);
+                $testedRaw = $r['tested_at'] ?? null;
+                if (($testedRaw === null || $testedRaw === '')
+                    && ($r['bs_ok'] !== null || $r['control_ok'] !== null)
+                    && in_array($state, ['PASS', 'FAIL_BS', 'FAIL_CONTROL', 'KEEP', 'DESTROYED', 'ERROR'], true)
+                ) {
+                    $testedRaw = $r['updated_at'] ?? null;
+                }
+                $tested = $fmtDt($testedRaw !== null && $testedRaw !== '' ? (string) $testedRaw : null);
                 ?>
                 <tr>
                     <td class="cell-narrow">#<?= $id ?></td>
@@ -96,6 +114,8 @@ $badgeClass = static function (string $state): string {
                         <?php else: ?>—<?php endif; ?>
                     </td>
                     <td class="cell-narrow muted"><?= $ctrl ?>/<?= $bs ?></td>
+                    <td class="cell-narrow muted" style="white-space:nowrap;font-size:0.78rem"><?= View::e($created) ?></td>
+                    <td class="cell-narrow muted" style="white-space:nowrap;font-size:0.78rem"><?= View::e($tested) ?></td>
                     <td class="cell-error" title="<?= View::e($err) ?>"><?= View::e($err) ?></td>
                     <td class="cell-actions">
                         <div class="actions">

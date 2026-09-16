@@ -182,13 +182,13 @@ final class RunService
     public function accountCreateBudget(array $pool): array
     {
         $budget = [];
-        // Считаем только run, где реально создали VPS (не SKIPPED/ожидание запаса без сервера)
+        // Лимит Timeweb ~10 floating IP/сутки — считаем только run с выданным IPv4
         $stmt = $this->pdo->prepare(
             "SELECT COUNT(*) FROM runs
              WHERE provider_account_id = ?
                AND DATE(created_at) = CURDATE()
-               AND provider_server_id IS NOT NULL
-               AND provider_server_id != ''"
+               AND ipv4 IS NOT NULL
+               AND ipv4 != ''"
         );
         foreach ($pool as $row) {
             $id = (int) $row['id'];
@@ -210,8 +210,8 @@ final class RunService
             "SELECT COUNT(*) FROM runs
              WHERE provider_account_id = ?
                AND DATE(created_at) = CURDATE()
-               AND provider_server_id IS NOT NULL
-               AND provider_server_id != ''"
+               AND ipv4 IS NOT NULL
+               AND ipv4 != ''"
         );
         foreach ($pool as $row) {
             $id = (int) $row['id'];
@@ -236,7 +236,9 @@ final class RunService
         }
         if ($pool === []) {
             $fallback = Settings::int('MAX_CREATES_PER_DAY', 20);
-            $today = (int) $this->pdo->query('SELECT COUNT(*) FROM runs WHERE DATE(created_at) = CURDATE()')->fetchColumn();
+            $today = (int) $this->pdo->query(
+                "SELECT COUNT(*) FROM runs WHERE DATE(created_at) = CURDATE() AND ipv4 IS NOT NULL AND ipv4 != ''"
+            )->fetchColumn();
             return max(0, $fallback - $today);
         }
         return array_sum($this->accountCreateBudget($pool));
@@ -271,10 +273,10 @@ final class RunService
 
         $maxDay = Settings::int('MAX_CREATES_PER_DAY', 20);
         $today = (int) $this->pdo->query(
-            'SELECT COUNT(*) FROM runs WHERE DATE(created_at) = CURDATE()'
+            "SELECT COUNT(*) FROM runs WHERE DATE(created_at) = CURDATE() AND ipv4 IS NOT NULL AND ipv4 != ''"
         )->fetchColumn();
         if ($today + $count > $maxDay) {
-            throw new \RuntimeException("Лимит MAX_CREATES_PER_DAY={$maxDay} (сегодня={$today})");
+            throw new \RuntimeException("Лимит MAX_CREATES_PER_DAY={$maxDay} (сегодня выдано IP={$today})");
         }
     }
 
@@ -455,7 +457,7 @@ final class RunService
             $ops = $result['operators'] !== [] ? implode(',', $result['operators']) : 'bsbord';
             $this->pdo->prepare(
                 "UPDATE runs SET provider_meta = ?, bs_ok = 1, cellular_ok = 1, bs_source = 'bsbord',
-                        state = 'PASS', verdict = 'PASS', error_message = ?, updated_at = NOW() WHERE id = ?"
+                        state = 'PASS', verdict = 'PASS', error_message = ?, tested_at = NOW(), updated_at = NOW() WHERE id = ?"
             )->execute([
                 json_encode($meta, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
                 $detail,
@@ -490,7 +492,7 @@ final class RunService
 
         $this->pdo->prepare(
             "UPDATE runs SET provider_meta = ?, bs_ok = 0, bs_source = 'bsbord',
-                    state = 'FAIL_BS', verdict = 'FAIL_BS', error_message = ?, updated_at = NOW() WHERE id = ?"
+                    state = 'FAIL_BS', verdict = 'FAIL_BS', error_message = ?, tested_at = NOW(), updated_at = NOW() WHERE id = ?"
         )->execute([
             json_encode($meta, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
             $detail,

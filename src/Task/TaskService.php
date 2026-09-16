@@ -145,7 +145,7 @@ final class TaskService
         if ($bsOk && $controlOk && $cellular) {
             $this->pdo->prepare(
                 "UPDATE runs SET bs_ok = 1, cellular_ok = 1, bs_source = 'agent', state = 'PASS', verdict = 'PASS',
-                        error_message = NULL, updated_at = NOW() WHERE id = ?"
+                        error_message = NULL, tested_at = NOW(), updated_at = NOW() WHERE id = ?"
             )->execute([$runId]);
 
             $this->inventory->upsertPass(
@@ -183,7 +183,7 @@ final class TaskService
         $reason = $error ?: (!$cellular ? 'not cellular' : ($wifi ? 'wifi on' : ($vpn ? 'vpn on' : (!$markerOk ? 'no marker' : 'bs fail'))));
         $this->pdo->prepare(
             "UPDATE runs SET bs_ok = 0, cellular_ok = ?, state = 'FAIL_BS', verdict = 'FAIL_BS',
-                    error_message = ?, updated_at = NOW() WHERE id = ?"
+                    error_message = ?, tested_at = NOW(), updated_at = NOW() WHERE id = ?"
         )->execute([$cellular ? 1 : 0, mb_substr($reason, 0, 2000), $runId]);
 
         if (!empty($run['ipv4'])) {
@@ -223,7 +223,7 @@ final class TaskService
 
             $this->pdo->prepare(
                 "UPDATE runs SET bs_ok = 0, state = 'FAIL_BS', verdict = 'FAIL_BS',
-                        error_message = 'BS task expired (no agent result)', updated_at = NOW() WHERE id = ?"
+                        error_message = 'BS task expired (no agent result)', tested_at = NOW(), updated_at = NOW() WHERE id = ?"
             )->execute([$task['run_id']]);
 
             if (!empty($task['ipv4'])) {
