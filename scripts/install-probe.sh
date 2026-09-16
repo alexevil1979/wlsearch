@@ -1,5 +1,5 @@
 #!/bin/sh
-# Manual nginx probe. Usage: bash install-probe.sh 26 timeweb
+# Usage: bash install-probe.sh 26 timeweb
 set -e
 RUN_ID="${1:-0}"
 PROVIDER="${2:-timeweb}"
@@ -11,10 +11,12 @@ TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 printf 'WL_PROBE_OK %s run_%s %s %s\n' "$PROVIDER" "$RUN_ID" "$IP" "$TS" > /var/www/html/index.html
 pkill -f wlsearch-probe.py 2>/dev/null || true
 fuser -k 80/tcp 443/tcp 2>/dev/null || true
-apt-get install -y -qq nginx openssl || { apt-get update -qq; apt-get install -y -qq nginx openssl; }
+apt-get update -qq
+apt-get install -y -qq nginx-light openssl || apt-get install -y -qq nginx-core openssl || apt-get install -y -qq nginx openssl
 openssl req -x509 -nodes -newkey rsa:2048 -days 3650 \
   -keyout /etc/nginx/ssl/probe.key -out /etc/nginx/ssl/probe.crt \
   -subj "/CN=${IP}/O=wlsearch-probe" 2>/dev/null
+mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
 cat > /etc/nginx/sites-available/default <<'NGX'
 server {
     listen 80 default_server;
@@ -37,10 +39,7 @@ server {
 }
 NGX
 ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default
-rm -f /var/www/html/index.nginx-debian.html 2>/dev/null || true
 nginx -t && systemctl restart nginx
 iptables -I INPUT -p tcp --dport 80 -j ACCEPT 2>/dev/null || true
 iptables -I INPUT -p tcp --dport 443 -j ACCEPT 2>/dev/null || true
-ufw allow 80/tcp 2>/dev/null || true
-ufw allow 443/tcp 2>/dev/null || true
 curl -sS http://127.0.0.1/; echo
