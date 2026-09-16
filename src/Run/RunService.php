@@ -269,7 +269,9 @@ final class RunService
         $skip = $this->pdo->prepare(
             "UPDATE runs SET state = 'SKIPPED', verdict = 'SKIPPED',
                     error_message = 'остановлено вручную', updated_at = NOW()
-             WHERE state = 'ORDERING'"
+             WHERE state = 'ORDERING'
+                OR (state = 'ERROR' AND provider_server_id IS NULL AND destroyed_at IS NULL
+                    AND (error_message LIKE 'ожидание запаса%' OR error_message LIKE 'нет запаса%' OR error_message LIKE 'Риск no_paid%'))"
         );
         $skip->execute();
         $skipped = $skip->rowCount();
@@ -282,8 +284,8 @@ final class RunService
         );
         $ids = $idsStmt->fetchAll(PDO::FETCH_COLUMN) ?: [];
         $destroying = 0;
-        foreach ($ids as $id) {
-            $this->updateState((int) $id, 'DESTROYING', null, 'остановлено вручную');
+        foreach ($ids as $rid) {
+            $this->updateState((int) $rid, 'DESTROYING', null, 'остановлено вручную');
             $destroying++;
         }
 

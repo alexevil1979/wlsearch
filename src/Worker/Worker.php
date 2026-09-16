@@ -177,48 +177,68 @@ final class Worker
             }
         }
 
-        $provider = ProviderFactory::forRun($run);
         $name = sprintf('wlsearch-%d-%s', $id, date('His'));
         $cloudInit = CloudInitBuilder::forRun((string) $run['provider'], $id);
 
         $tried = [];
-        if ($accountId > 0) {
-            $tried[$accountId] = true;
+        $lastBalanceErr = null;
+        $maxAccountTries = max(1, count($accounts->listEnabled((string) $run['provider'])) + 1);
+
+        for ($attempt = 0; $attempt < $maxAccountTries; $attempt++) {
+            if ($accountId > 0) {
+                $tried[$accountId] = true;
+            }
+            $run['provider_account_id'] = $accountId > 0 ? $accountId : null;
+            $provider = ProviderFactory::forRun($run);
+
+            try {
+                $info = $provider->create([
+                    'name' => $name,
+                    'region' => $run['region'],
+                    'cloud_init' => $cloudInit,
+                    'comment' => $run['comment'] ?? ('wlsearch run #' . $id),
+                ]);
+                if ($accountId > 0) {
+                    $accounts->markUsed($accountId);
+                }
+                $lastBalanceErr = null;
+                break;
+            } catch (\Wlsearch\Provider\BalanceShortException $e) {
+                $lastBalanceErr = $e;
+                if ($accountId > 0) {
+                    $accounts->markUsed($accountId, $e->getMessage());
+                }
+                fwrite(STDOUT, "run #{$id}: balance short on acc #" . ($accountId ?: '-') . ' — ' . $e->getMessage() . "\n");
+                $switched = $this->reassignOrderingAccount($run, array_keys($tried));
+                if ($switched) {
+                    $run = $this->runs->get($id) ?? $run;
+                    $accountId = (int) ($run['provider_account_id'] ?? 0);
+                    fwrite(STDOUT, "run #{$id}: пробуем acc #{$accountId}\n");
+                    continue;
+                }
+                // Нет другого аккаунта с запасом — сразу SKIPPED (не висеть вечно)
+                $msg = 'нет запаса ни на одном аккаунте: ' . $e->getMessage();
+                $this->pdo->prepare(
+                    "UPDATE runs SET state = 'SKIPPED', verdict = 'SKIPPED', error_message = ?, updated_at = NOW() WHERE id = ?"
+                )->execute([mb_substr($msg, 0, 2000), $id]);
+                fwrite(STDOUT, "run #{$id}: SKIPPED — {$msg}\n");
+                $this->tg->send("wlsearch: SKIPPED run #{$id} — недостаточно запаса Timeweb");
+                return;
+            } catch (\Throwable $e) {
+                if ($accountId > 0) {
+                    $accounts->markUsed($accountId, $e->getMessage());
+                }
+                throw $e;
+            }
         }
 
-        try {
-            $info = $provider->create([
-                'name' => $name,
-                'region' => $run['region'],
-                'cloud_init' => $cloudInit,
-                'comment' => $run['comment'] ?? ('wlsearch run #' . $id),
-            ]);
-            if ($accountId > 0) {
-                $accounts->markUsed($accountId);
-            }
-        } catch (\Wlsearch\Provider\BalanceShortException $e) {
-            if ($accountId > 0) {
-                $accounts->markUsed($accountId, $e->getMessage());
-            }
-            fwrite(STDOUT, "run #{$id}: balance short on acc #" . ($accountId ?: '-') . ' — ' . $e->getMessage() . "\n");
-            $switched = $this->reassignOrderingAccount($run, array_keys($tried));
-            if ($switched) {
-                fwrite(STDOUT, "run #{$id}: переключён на другой аккаунт, retry next tick\n");
-                return;
-            }
-            // Мягко ждём (биллинг после destroy / пополнение), не спамим ERROR
-            if ($this->updatedAgeSeconds($run) < 900) {
-                $this->pdo->prepare(
-                    'UPDATE runs SET error_message = ?, updated_at = NOW() WHERE id = ?'
-                )->execute([mb_substr('ожидание запаса: ' . $e->getMessage(), 0, 2000), $id]);
-                return;
-            }
-            throw $e;
-        } catch (\Throwable $e) {
-            if ($accountId > 0) {
-                $accounts->markUsed($accountId, $e->getMessage());
-            }
-            throw $e;
+        if ($lastBalanceErr !== null || !isset($info)) {
+            $msg = 'нет запаса ни на одном аккаунте'
+                . ($lastBalanceErr ? (': ' . $lastBalanceErr->getMessage()) : '');
+            $this->pdo->prepare(
+                "UPDATE runs SET state = 'SKIPPED', verdict = 'SKIPPED', error_message = ?, updated_at = NOW() WHERE id = ?"
+            )->execute([mb_substr($msg, 0, 2000), $id]);
+            return;
         }
 
         $meta = null;
