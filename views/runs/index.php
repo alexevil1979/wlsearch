@@ -67,8 +67,8 @@ $fmtDt = static function (?string $dt): string {
                 $canRetryBs = !empty($r['ipv4'])
                     && !in_array($state, ['DESTROYED', 'DESTROYING', 'ORDERING', 'PROVISIONING'], true);
                 $probeHint = '';
-                if ($state === 'BOOTSTRAPPING' && !empty($r['ipv4'])) {
-                    $probeHint = \Wlsearch\Probe\CloudInitBuilder::manualInstallBash(
+                if (in_array($state, ['BOOTSTRAPPING', 'CONTROL_CHECK'], true) && !empty($r['ipv4'])) {
+                    $probeHint = \Wlsearch\Probe\CloudInitBuilder::oneLiner(
                         (string) ($r['provider'] ?? 'timeweb'),
                         $id
                     );
@@ -158,9 +158,9 @@ $fmtDt = static function (?string $dt): string {
                     <td colspan="10" style="padding-top:0">
                         <details>
                             <summary class="muted" style="cursor:pointer;font-size:0.85rem">
-                                Probe не ответил (cloud-init). Вставь на VPS и нажми BS
+                                Probe кривой / 502. Одна команда (nginx) на VPS → потом BS
                             </summary>
-                            <pre style="white-space:pre-wrap;font-size:0.72rem;max-height:14rem;overflow:auto;margin:0.4rem 0 0"><?= View::e($probeHint) ?></pre>
+                            <pre style="white-space:pre-wrap;font-size:0.72rem;max-height:6rem;overflow:auto;margin:0.4rem 0 0"><?= View::e($probeHint) ?></pre>
                         </details>
                     </td>
                 </tr>

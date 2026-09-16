@@ -34,10 +34,11 @@ Docs: https://docs.selectel.ru/cloud-servers/
 
 ## Probe
 
-Timeweb: в `cloud_init` уходит **`#!/bin/sh`** (формат из их доки; сложный `#cloud-config` + YAML
-часто не выполняется, хотя ручной paste тех же команд на VPS ок).
-Скрипт поднимает python probe **:80 + :443** → тело `WL_PROBE_OK <provider> run_<id> <ip> <ts>`.
+Timeweb: в `cloud_init` уходит **`#!/bin/sh`** → **nginx :80+:443** (self-signed),
+тело `WL_PROBE_OK <provider> run_<id> <ip> <ts>`.
+(Раньше python http.server — снаружи часто 502 при живом localhost.)
 Если за ~90с probe не отвечает — worker один раз PATCH cloud_init + reboot.
+Ручной one-liner: `CloudInitBuilder::oneLiner($provider, $runId)`.
 Selectel: тот же скрипт в Nova `user_data` (base64).
 
 ## ASN
