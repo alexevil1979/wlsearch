@@ -125,8 +125,8 @@ final class ProviderAccountService
         string $actor,
     ): int {
         $provider = strtolower($provider);
-        if (!in_array($provider, ['timeweb', 'selectel'], true)) {
-            throw new \InvalidArgumentException('provider: timeweb|selectel');
+        if (!in_array($provider, ['timeweb', 'selectel', 'yandex'], true)) {
+            throw new \InvalidArgumentException('provider: timeweb|selectel|yandex');
         }
         $name = trim($name);
         if ($name === '') {
@@ -270,7 +270,9 @@ final class ProviderAccountService
         $out = [];
         foreach ($creds as $k => $v) {
             $lk = strtolower((string) $k);
-            if (str_contains($lk, 'token') || str_contains($lk, 'password') || str_contains($lk, 'secret')) {
+            if (str_contains($lk, 'token') || str_contains($lk, 'password') || str_contains($lk, 'secret')
+                || str_contains($lk, 'private_key') || str_contains($lk, 'key_json')
+            ) {
                 $s = (string) $v;
                 $out[$k] = $s === '' ? '' : (mb_substr($s, 0, 4) . '…' . mb_substr($s, -4));
             } else {
@@ -287,6 +289,16 @@ final class ProviderAccountService
             $t = $credentials['TIMEWEB_API_TOKEN'] ?? '';
             if ($requireAll && $t === '') {
                 throw new \InvalidArgumentException('Нужен TIMEWEB_API_TOKEN');
+            }
+            return;
+        }
+        if ($provider === 'yandex') {
+            $json = $credentials['YANDEX_SA_KEY_JSON'] ?? '';
+            $sa = $credentials['YANDEX_SA_ID'] ?? '';
+            $kid = $credentials['YANDEX_SA_KEY_ID'] ?? '';
+            $pk = $credentials['YANDEX_SA_PRIVATE_KEY'] ?? '';
+            if ($requireAll && $json === '' && ($sa === '' || $kid === '' || $pk === '')) {
+                throw new \InvalidArgumentException('Нужен YANDEX_SA_KEY_JSON (ключ сервисного аккаунта)');
             }
             return;
         }

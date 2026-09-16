@@ -16,11 +16,11 @@ foreach ($byProvider as $list) {
 ?>
 <h1>Аккаунты провайдеров</h1>
 <p class="muted">
-    Несколько Timeweb / Selectel. Галочками включаете, какие участвуют в лотерее.
+    Несколько Timeweb / Selectel / Yandex Cloud. Галочками включаете, какие участвуют в лотерее.
     Run идут round-robin (LRU) по включённым — удобно обходить дневной лимит floating IP (~10/аккаунт).
 </p>
 
-<?php foreach (['timeweb' => 'Timeweb Cloud', 'selectel' => 'Selectel'] as $prov => $title): ?>
+<?php foreach (['timeweb' => 'Timeweb Cloud', 'selectel' => 'Selectel', 'yandex' => 'Yandex Cloud'] as $prov => $title): ?>
     <?php $list = $byProvider[$prov] ?? []; ?>
     <div class="card" id="<?= View::e($prov) ?>" style="margin-bottom:1.2rem">
         <h2 style="margin-top:0"><?= View::e($title) ?></h2>
@@ -35,8 +35,14 @@ foreach ($byProvider as $list) {
                         <?php
                         $id = (int) $a['id'];
                         $cfg = $a['_config'] ?? [];
-                        $zone = $cfg['TIMEWEB_AVAILABILITY_ZONE'] ?? $cfg['SELECTEL_REGION'] ?? '';
+                        $zone = $cfg['TIMEWEB_AVAILABILITY_ZONE']
+                            ?? $cfg['SELECTEL_REGION']
+                            ?? $cfg['YANDEX_ZONE_ID']
+                            ?? '';
                         $preset = $cfg['TIMEWEB_PRESET_ID'] ?? $cfg['SELECTEL_FLAVOR_ID'] ?? '';
+                        if ($preset === '' && ($cfg['YANDEX_CORES'] ?? '') !== '') {
+                            $preset = ($cfg['YANDEX_CORES'] ?? '') . 'c/' . ($cfg['YANDEX_MEMORY_GB'] ?? '') . 'G';
+                        }
                         ?>
                         <label style="display:flex;flex-wrap:wrap;gap:0.6rem 1rem;align-items:center;padding:0.45rem 0;border-bottom:1px solid rgba(127,127,127,0.25);cursor:pointer">
                             <span style="display:inline-flex;align-items:center;gap:0.4rem;min-width:14rem">
@@ -77,13 +83,14 @@ foreach ($byProvider as $list) {
     <form method="post" action="<?= $editRow ? '/accounts/' . (int) $editRow['id'] : '/accounts' ?>">
         <?= $csrf ?>
         <?php
-        $p = $editRow ? (string) $editRow['provider'] : 'timeweb';
+        $p = $editRow ? (string) $editRow['provider'] : 'yandex';
         $cfg = $editRow['_config'] ?? [];
         ?>
         <div class="form-grid">
         <div>
         <label for="provider">Провайдер</label>
-        <select id="provider" name="provider" <?= $editRow ? 'disabled' : '' ?> onchange="document.getElementById('tw-fields').style.display=this.value==='timeweb'?'block':'none';document.getElementById('sel-fields').style.display=this.value==='selectel'?'block':'none'">
+        <select id="provider" name="provider" <?= $editRow ? 'disabled' : '' ?> onchange="(function(v){['tw','sel','yc'].forEach(function(x){document.getElementById(x+'-fields').style.display='none';});var m={timeweb:'tw',selectel:'sel',yandex:'yc'};document.getElementById(m[v]+'-fields').style.display='block';})(this.value)">
+            <option value="yandex" <?= $p === 'yandex' ? 'selected' : '' ?>>yandex</option>
             <option value="timeweb" <?= $p === 'timeweb' ? 'selected' : '' ?>>timeweb</option>
             <option value="selectel" <?= $p === 'selectel' ? 'selected' : '' ?>>selectel</option>
         </select>
@@ -94,7 +101,7 @@ foreach ($byProvider as $list) {
         <div>
         <label for="name">Имя</label>
         <input id="name" name="name" type="text" required maxlength="128"
-               value="<?= View::e((string) ($editRow['name'] ?? '')) ?>" placeholder="Timeweb #2 / Selectel prod">
+               value="<?= View::e((string) ($editRow['name'] ?? '')) ?>" placeholder="Yandex / Timeweb #2 / Selectel prod">
         </div>
         <div class="span-2">
         <label style="display:inline-flex;align-items:center;gap:0.4rem;margin:0.6rem 0">
@@ -205,6 +212,73 @@ foreach ($byProvider as $list) {
             <div>
             <label for="SELECTEL_PRESET_COST_RUB">Оценка ₽</label>
             <input id="SELECTEL_PRESET_COST_RUB" name="SELECTEL_PRESET_COST_RUB" type="text" value="<?= View::e((string) ($cfg['SELECTEL_PRESET_COST_RUB'] ?? '0')) ?>">
+            </div>
+            </div>
+        </div>
+
+        <div id="yc-fields" style="display:<?= $p === 'yandex' ? 'block' : 'none' ?>">
+            <h3>Yandex Cloud</h3>
+            <p class="muted">Сервисный аккаунт → ключ (authorized key JSON) + folder + subnet. Публичный IPv4 через one-to-one NAT.</p>
+            <div class="form-grid">
+            <div class="span-2">
+            <label for="YANDEX_SA_KEY_JSON">SA key JSON <?= $editRow ? '(пусто = не менять)' : '' ?></label>
+            <textarea id="YANDEX_SA_KEY_JSON" name="YANDEX_SA_KEY_JSON" rows="6" autocomplete="off"
+                      placeholder='{"id":"...","service_account_id":"...","private_key":"-----BEGIN PRIVATE KEY-----\\n..."}'></textarea>
+            </div>
+            <div>
+            <label for="YANDEX_FOLDER_ID">Folder id</label>
+            <input id="YANDEX_FOLDER_ID" name="YANDEX_FOLDER_ID" type="text"
+                   value="<?= View::e((string) ($cfg['YANDEX_FOLDER_ID'] ?? '')) ?>" placeholder="b1g…">
+            </div>
+            <div>
+            <label for="YANDEX_SUBNET_ID">Subnet id</label>
+            <input id="YANDEX_SUBNET_ID" name="YANDEX_SUBNET_ID" type="text"
+                   value="<?= View::e((string) ($cfg['YANDEX_SUBNET_ID'] ?? '')) ?>" placeholder="e9b…">
+            </div>
+            <div>
+            <label for="YANDEX_ZONE_ID">Zone</label>
+            <input id="YANDEX_ZONE_ID" name="YANDEX_ZONE_ID" type="text"
+                   value="<?= View::e((string) ($cfg['YANDEX_ZONE_ID'] ?? 'ru-central1-a')) ?>">
+            </div>
+            <div>
+            <label for="YANDEX_IMAGE_FAMILY">Image family</label>
+            <input id="YANDEX_IMAGE_FAMILY" name="YANDEX_IMAGE_FAMILY" type="text"
+                   value="<?= View::e((string) ($cfg['YANDEX_IMAGE_FAMILY'] ?? 'ubuntu-2204-lts')) ?>">
+            </div>
+            <div>
+            <label for="YANDEX_IMAGE_ID">Image id (опц.)</label>
+            <input id="YANDEX_IMAGE_ID" name="YANDEX_IMAGE_ID" type="text"
+                   value="<?= View::e((string) ($cfg['YANDEX_IMAGE_ID'] ?? '')) ?>">
+            </div>
+            <div>
+            <label for="YANDEX_PLATFORM_ID">Platform</label>
+            <input id="YANDEX_PLATFORM_ID" name="YANDEX_PLATFORM_ID" type="text"
+                   value="<?= View::e((string) ($cfg['YANDEX_PLATFORM_ID'] ?? 'standard-v3')) ?>">
+            </div>
+            <div>
+            <label for="YANDEX_CORES">Cores</label>
+            <input id="YANDEX_CORES" name="YANDEX_CORES" type="text"
+                   value="<?= View::e((string) ($cfg['YANDEX_CORES'] ?? '2')) ?>">
+            </div>
+            <div>
+            <label for="YANDEX_MEMORY_GB">RAM GB</label>
+            <input id="YANDEX_MEMORY_GB" name="YANDEX_MEMORY_GB" type="text"
+                   value="<?= View::e((string) ($cfg['YANDEX_MEMORY_GB'] ?? '2')) ?>">
+            </div>
+            <div>
+            <label for="YANDEX_DISK_GB">Disk GB</label>
+            <input id="YANDEX_DISK_GB" name="YANDEX_DISK_GB" type="text"
+                   value="<?= View::e((string) ($cfg['YANDEX_DISK_GB'] ?? '15')) ?>">
+            </div>
+            <div>
+            <label for="YANDEX_PREEMPTIBLE">Preemptible (1/0)</label>
+            <input id="YANDEX_PREEMPTIBLE" name="YANDEX_PREEMPTIBLE" type="text"
+                   value="<?= View::e((string) ($cfg['YANDEX_PREEMPTIBLE'] ?? '1')) ?>">
+            </div>
+            <div>
+            <label for="YANDEX_PRESET_COST_RUB">Оценка ₽</label>
+            <input id="YANDEX_PRESET_COST_RUB" name="YANDEX_PRESET_COST_RUB" type="text"
+                   value="<?= View::e((string) ($cfg['YANDEX_PRESET_COST_RUB'] ?? '0')) ?>">
             </div>
             </div>
         </div>

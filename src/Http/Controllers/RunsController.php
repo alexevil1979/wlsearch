@@ -36,26 +36,41 @@ final class RunsController
         $runSvc = new RunService();
         $twAccounts = $accSvc->listAll('timeweb');
         $selAccounts = $accSvc->listAll('selectel');
-        $twEnabled = array_values(array_filter($twAccounts, static fn (array $a): bool => (int) $a['enabled'] === 1));
-        $capacity = $runSvc->dailyCreateCapacity('timeweb');
-        $usage = $runSvc->accountCreateUsage($twEnabled);
+        $ycAccounts = $accSvc->listAll('yandex');
+        $yandexConfigured = ProviderFactory::isConfigured('yandex');
+        $timewebConfigured = ProviderFactory::isConfigured('timeweb');
+        $selectelConfigured = ProviderFactory::isConfigured('selectel');
+        // Timeweb на паузе — по умолчанию Yandex, если настроен
+        $preferred = $yandexConfigured ? 'yandex' : ($timewebConfigured ? 'timeweb' : 'selectel');
+        $prefAccounts = match ($preferred) {
+            'yandex' => $ycAccounts,
+            'selectel' => $selAccounts,
+            default => $twAccounts,
+        };
+        $prefEnabled = array_values(array_filter($prefAccounts, static fn (array $a): bool => (int) $a['enabled'] === 1));
+        $capacity = $runSvc->dailyCreateCapacity($preferred);
+        $usage = $runSvc->accountCreateUsage($prefEnabled);
         View::render('runs/new', [
             'title' => 'Запуск прогона',
             'user' => AuthService::user(),
             'flash' => Flash::pull(),
             'csrf' => Csrf::field(),
             'nav' => 'runs',
-            'timewebConfigured' => ProviderFactory::isConfigured('timeweb'),
-            'selectelConfigured' => ProviderFactory::isConfigured('selectel'),
+            'timewebConfigured' => $timewebConfigured,
+            'selectelConfigured' => $selectelConfigured,
+            'yandexConfigured' => $yandexConfigured,
+            'preferredProvider' => $preferred,
             'timewebAccounts' => $twAccounts,
             'selectelAccounts' => $selAccounts,
+            'yandexAccounts' => $ycAccounts,
             'defaultRegion' => Settings::get('TIMEWEB_AVAILABILITY_ZONE', Env::get('TIMEWEB_AVAILABILITY_ZONE', 'spb-3')),
             'defaultSelectelRegion' => Env::get('SELECTEL_REGION', 'ru-9a'),
+            'defaultYandexRegion' => Env::get('YANDEX_ZONE_ID', 'ru-central1-a'),
             'maxParallel' => max(1, Settings::int('MAX_PARALLEL_VMS', 1)),
             'dailyCapacity' => $capacity,
             'accountUsage' => $usage,
             'createsPerAccount' => RunService::CREATES_PER_ACCOUNT_DAY,
-            'enabledAccountCount' => count($twEnabled),
+            'enabledAccountCount' => count($prefEnabled),
             'bsbordConfigured' => (Env::get('BSBORD_API_TOKEN', '') ?? '') !== ''
                 || (Settings::get('BSBORD_API_TOKEN', '') ?? '') !== '',
             'defaultBsMode' => Settings::get('BS_MODE_DEFAULT', Env::get('BS_MODE_DEFAULT', 'bsbord')),

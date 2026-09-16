@@ -15,6 +15,7 @@ final class ProviderFactory
         return match ($provider) {
             'timeweb' => new TimewebProvider($bag),
             'selectel' => new SelectelProvider($bag),
+            'yandex' => new YandexCloudProvider($bag),
             default => throw new \InvalidArgumentException('Unknown provider: ' . $provider),
         };
     }
@@ -46,6 +47,12 @@ final class ProviderFactory
                 && (Env::get('SELECTEL_FLAVOR_ID') ?? '') !== ''
                 && (Env::get('SELECTEL_IMAGE_ID') ?? '') !== ''
                 && (Env::get('SELECTEL_NETWORK_ID') ?? '') !== '',
+            'yandex' => ((Env::get('YANDEX_SA_KEY_JSON') ?? '') !== ''
+                    || ((Env::get('YANDEX_SA_ID') ?? '') !== ''
+                        && (Env::get('YANDEX_SA_KEY_ID') ?? '') !== ''
+                        && (Env::get('YANDEX_SA_PRIVATE_KEY') ?? '') !== ''))
+                && (Env::get('YANDEX_FOLDER_ID') ?? '') !== ''
+                && (Env::get('YANDEX_SUBNET_ID') ?? '') !== '',
             default => false,
         };
     }

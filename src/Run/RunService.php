@@ -57,8 +57,8 @@ final class RunService
         bool $stopOnPass = true,
     ): array {
         $provider = strtolower($provider);
-        if (!in_array($provider, ['timeweb', 'selectel'], true)) {
-            throw new \InvalidArgumentException('provider must be timeweb|selectel');
+        if (!in_array($provider, ['timeweb', 'selectel', 'yandex'], true)) {
+            throw new \InvalidArgumentException('provider must be timeweb|selectel|yandex');
         }
         if (!ProviderFactory::isConfigured($provider)) {
             throw new \RuntimeException('Провайдер не настроен — добавьте аккаунт в /accounts (или .env)');

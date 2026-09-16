@@ -2,10 +2,13 @@
 /** @var string $csrf */
 /** @var bool $timewebConfigured */
 /** @var bool $selectelConfigured */
+/** @var bool $yandexConfigured */
 /** @var bool $bsbordConfigured */
 /** @var string|null $defaultRegion */
 /** @var string|null $defaultSelectelRegion */
+/** @var string|null $defaultYandexRegion */
 /** @var string|null $defaultBsMode */
+/** @var string $preferredProvider */
 /** @var int $maxParallel */
 /** @var int $dailyCapacity */
 /** @var int $createsPerAccount */
@@ -13,17 +16,26 @@
 /** @var array<int, array{used:int,left:int}> $accountUsage */
 /** @var list<array<string,mixed>> $timewebAccounts */
 /** @var list<array<string,mixed>> $selectelAccounts */
+/** @var list<array<string,mixed>> $yandexAccounts */
 use Wlsearch\Support\View;
-$anyProvider = $timewebConfigured || $selectelConfigured;
+$yandexConfigured = $yandexConfigured ?? false;
+$anyProvider = $timewebConfigured || $selectelConfigured || $yandexConfigured;
 $bsDefault = $defaultBsMode ?: 'bsbord';
 $timewebAccounts = $timewebAccounts ?? [];
 $selectelAccounts = $selectelAccounts ?? [];
+$yandexAccounts = $yandexAccounts ?? [];
+$preferredProvider = $preferredProvider ?? ($yandexConfigured ? 'yandex' : ($timewebConfigured ? 'timeweb' : 'selectel'));
 $dailyCapacity = (int) ($dailyCapacity ?? 0);
 $createsPerAccount = (int) ($createsPerAccount ?? 10);
 $enabledAccountCount = (int) ($enabledAccountCount ?? 0);
 $maxParallel = max(1, (int) ($maxParallel ?? 1));
 $accountUsage = $accountUsage ?? [];
 $defaultCount = max(1, min(10, $dailyCapacity > 0 ? $dailyCapacity : 1));
+$defaultRegionValue = match ($preferredProvider) {
+    'yandex' => (string) ($defaultYandexRegion ?? 'ru-central1-a'),
+    'selectel' => (string) ($defaultSelectelRegion ?? 'ru-9a'),
+    default => (string) ($defaultRegion ?? 'spb-3'),
+};
 ?>
 <h1>Запуск прогона</h1>
 <p class="muted">
@@ -41,12 +53,13 @@ $defaultCount = max(1, min(10, $dailyCapacity > 0 ? $dailyCapacity : 1));
 
         <label for="provider">Provider</label>
         <select id="provider" name="provider" required
-                onchange="(function(v){var tw=document.getElementById('acc-tw'),sel=document.getElementById('acc-sel');tw.style.display=v==='timeweb'?'block':'none';sel.style.display=v==='selectel'?'block':'none';tw.querySelectorAll('input[type=checkbox]').forEach(function(c){c.disabled=v!=='timeweb'||c.dataset.off==='1';});sel.querySelectorAll('input[type=checkbox]').forEach(function(c){c.disabled=v!=='selectel'||c.dataset.off==='1';});})(this.value)">
-            <option value="timeweb" <?= $timewebConfigured ? '' : 'disabled' ?>>timeweb <?= $timewebConfigured ? '' : '(не настроен)' ?></option>
-            <option value="selectel" <?= $selectelConfigured ? '' : 'disabled' ?>>selectel <?= $selectelConfigured ? '' : '(не настроен)' ?></option>
+                onchange="(function(v){['tw','sel','yc'].forEach(function(x){var el=document.getElementById('acc-'+x);if(!el)return;el.style.display='none';el.querySelectorAll('input[type=checkbox]').forEach(function(c){c.disabled=true;});});var map={timeweb:'tw',selectel:'sel',yandex:'yc'};var id=map[v];var box=document.getElementById('acc-'+id);if(box){box.style.display='block';box.querySelectorAll('input[type=checkbox]').forEach(function(c){c.disabled=c.dataset.off==='1';});}var reg={timeweb:<?= json_encode((string) ($defaultRegion ?? 'spb-3')) ?>,selectel:<?= json_encode((string) ($defaultSelectelRegion ?? 'ru-9a')) ?>,yandex:<?= json_encode((string) ($defaultYandexRegion ?? 'ru-central1-a')) ?>};var r=document.getElementById('region');if(r&&reg[v])r.value=reg[v];})(this.value)">
+            <option value="yandex" <?= $preferredProvider === 'yandex' ? 'selected' : '' ?> <?= $yandexConfigured ? '' : 'disabled' ?>>yandex <?= $yandexConfigured ? '' : '(не настроен)' ?></option>
+            <option value="timeweb" <?= $preferredProvider === 'timeweb' ? 'selected' : '' ?> <?= $timewebConfigured ? '' : 'disabled' ?>>timeweb <?= $timewebConfigured ? '' : '(не настроен)' ?></option>
+            <option value="selectel" <?= $preferredProvider === 'selectel' ? 'selected' : '' ?> <?= $selectelConfigured ? '' : 'disabled' ?>>selectel <?= $selectelConfigured ? '' : '(не настроен)' ?></option>
         </select>
 
-        <div id="acc-tw" style="margin:0.75rem 0">
+        <div id="acc-tw" style="margin:0.75rem 0;<?= $preferredProvider === 'timeweb' ? '' : 'display:none' ?>">
             <p style="margin:0 0 0.4rem;font-weight:600">Аккаунты Timeweb</p>
             <p class="muted" style="margin:0 0 0.5rem">Галочки = участвуют. Лимит <?= (int) $createsPerAccount ?> create/сутки на аккаунт.</p>
             <?php if ($timewebAccounts === []): ?>
@@ -56,8 +69,8 @@ $defaultCount = max(1, min(10, $dailyCapacity > 0 ? $dailyCapacity : 1));
                     <?php foreach ($timewebAccounts as $a): ?>
                         <label style="display:inline-flex;align-items:center;gap:0.35rem;cursor:pointer">
                             <input type="checkbox" name="account_id[]" value="<?= (int) $a['id'] ?>"
-                                   <?= (int) $a['enabled'] ? 'checked' : '' ?>
-                                   <?= (int) $a['enabled'] ? '' : 'disabled' ?>
+                                   <?= $preferredProvider === 'timeweb' && (int) $a['enabled'] ? 'checked' : '' ?>
+                                   <?= $preferredProvider === 'timeweb' && (int) $a['enabled'] ? '' : 'disabled' ?>
                                    data-off="<?= (int) $a['enabled'] ? '0' : '1' ?>">
                             #<?= (int) $a['id'] ?> <?= View::e((string) $a['name']) ?>
                             <?php if (!(int) $a['enabled']): ?><span class="muted">(выкл)</span><?php endif; ?>
@@ -67,7 +80,7 @@ $defaultCount = max(1, min(10, $dailyCapacity > 0 ? $dailyCapacity : 1));
             <?php endif; ?>
         </div>
 
-        <div id="acc-sel" style="display:none;margin:0.75rem 0">
+        <div id="acc-sel" style="margin:0.75rem 0;<?= $preferredProvider === 'selectel' ? '' : 'display:none' ?>">
             <p style="margin:0 0 0.4rem;font-weight:600">Аккаунты Selectel</p>
             <?php if ($selectelAccounts === []): ?>
                 <p class="muted">Нет аккаунтов — <a href="/accounts">добавить</a></p>
@@ -76,10 +89,31 @@ $defaultCount = max(1, min(10, $dailyCapacity > 0 ? $dailyCapacity : 1));
                     <?php foreach ($selectelAccounts as $a): ?>
                         <label style="display:inline-flex;align-items:center;gap:0.35rem;cursor:pointer">
                             <input type="checkbox" name="account_id[]" value="<?= (int) $a['id'] ?>"
-                                   disabled
-                                   data-off="<?= (int) $a['enabled'] ? '0' : '1' ?>"
-                                   <?= (int) $a['enabled'] ? 'checked' : '' ?>>
+                                   <?= $preferredProvider === 'selectel' && (int) $a['enabled'] ? 'checked' : '' ?>
+                                   <?= $preferredProvider === 'selectel' && (int) $a['enabled'] ? '' : 'disabled' ?>
+                                   data-off="<?= (int) $a['enabled'] ? '0' : '1' ?>">
                             #<?= (int) $a['id'] ?> <?= View::e((string) $a['name']) ?>
+                        </label>
+                    <?php endforeach; ?>
+                </div>
+            <?php endif; ?>
+        </div>
+
+        <div id="acc-yc" style="margin:0.75rem 0;<?= $preferredProvider === 'yandex' ? '' : 'display:none' ?>">
+            <p style="margin:0 0 0.4rem;font-weight:600">Аккаунты Yandex Cloud</p>
+            <p class="muted" style="margin:0 0 0.5rem">Галочки = участвуют. Лимит <?= (int) $createsPerAccount ?> create/сутки на аккаунт.</p>
+            <?php if ($yandexAccounts === []): ?>
+                <p class="muted">Нет аккаунтов — <a href="/accounts">добавить</a></p>
+            <?php else: ?>
+                <div style="display:flex;flex-wrap:wrap;gap:0.5rem 1rem">
+                    <?php foreach ($yandexAccounts as $a): ?>
+                        <label style="display:inline-flex;align-items:center;gap:0.35rem;cursor:pointer">
+                            <input type="checkbox" name="account_id[]" value="<?= (int) $a['id'] ?>"
+                                   <?= $preferredProvider === 'yandex' && (int) $a['enabled'] ? 'checked' : '' ?>
+                                   <?= $preferredProvider === 'yandex' && (int) $a['enabled'] ? '' : 'disabled' ?>
+                                   data-off="<?= (int) $a['enabled'] ? '0' : '1' ?>">
+                            #<?= (int) $a['id'] ?> <?= View::e((string) $a['name']) ?>
+                            <?php if (!(int) $a['enabled']): ?><span class="muted">(выкл)</span><?php endif; ?>
                         </label>
                     <?php endforeach; ?>
                 </div>
@@ -88,8 +122,8 @@ $defaultCount = max(1, min(10, $dailyCapacity > 0 ? $dailyCapacity : 1));
 
         <label for="region">Region / AZ (опц.)</label>
         <input id="region" name="region" type="text"
-               value="<?= View::e((string) ($timewebConfigured ? $defaultRegion : $defaultSelectelRegion)) ?>"
-               placeholder="spb-3 или ru-9a">
+               value="<?= View::e($defaultRegionValue) ?>"
+               placeholder="ru-central1-a / spb-3 / ru-9a">
 
         <label for="bs_mode">BS-проверка</label>
         <select id="bs_mode" name="bs_mode" required>

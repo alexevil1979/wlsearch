@@ -12,7 +12,7 @@
 
 ## Возможности
 
-- Запуск прогонов (timeweb / selectel), лимиты, destroy/keep
+- Запуск прогонов (yandex / timeweb / selectel), лимиты, destroy/keep
 - Phone-agent API + Termux-скрипт
 - Inventory PASS, devices/tokens, blacklist ASN/prefix
 - Settings UI, audit log, Telegram notify
@@ -35,6 +35,7 @@ php8.2 bin/wlsearch migrate
 ## CLI
 
 ```bash
+php bin/wlsearch run --provider=yandex --region=ru-central1-a --count=1
 php bin/wlsearch run --provider=timeweb --region=spb-3 --count=1
 php bin/wlsearch run --provider=selectel --region=ru-9a --count=1
 php bin/wlsearch worker

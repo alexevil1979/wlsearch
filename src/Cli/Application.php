@@ -46,7 +46,7 @@ Usage:
   php bin/wlsearch migrate
   php bin/wlsearch health
   php bin/wlsearch worker
-  php bin/wlsearch run --provider=timeweb|selectel --region=... --count=1 [--bs-mode=agent|bsbord|both] [--keep-on-fail]
+  php bin/wlsearch run --provider=timeweb|selectel|yandex --region=... --count=1 [--bs-mode=agent|bsbord|both] [--keep-on-fail]
   php bin/wlsearch destroy-failed
   php bin/wlsearch inventory
   php bin/wlsearch agent-token:create --name=phone-mts --operator=mts

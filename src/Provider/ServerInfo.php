@@ -41,6 +41,7 @@ final class ServerInfo
         }
         $s = strtolower(trim($this->status));
         // Только явно рабочие статусы — иначе no_paid/configuring ошибочно считались ready
+        // RUNNING / on / active — готовы к probe
         return in_array($s, ['on', 'active', 'running', 'started', 'ok'], true);
     }
 }

@@ -17,7 +17,7 @@ final class AccountsController
         $this->auth();
         $svc = new ProviderAccountService();
         $accounts = $svc->listAll();
-        $byProvider = ['timeweb' => [], 'selectel' => []];
+        $byProvider = ['timeweb' => [], 'selectel' => [], 'yandex' => []];
         foreach ($accounts as $a) {
             $p = (string) $a['provider'];
             if (!isset($byProvider[$p])) {
@@ -177,8 +177,31 @@ final class AccountsController
                 }
                 $config[$k] = trim((string) $_POST[$k]);
             }
+        } elseif ($provider === 'yandex') {
+            $creds['YANDEX_SA_KEY_JSON'] = trim((string) ($_POST['YANDEX_SA_KEY_JSON'] ?? ''));
+            foreach ([
+                'YANDEX_FOLDER_ID', 'YANDEX_SUBNET_ID', 'YANDEX_ZONE_ID',
+                'YANDEX_IMAGE_ID', 'YANDEX_IMAGE_FAMILY', 'YANDEX_IMAGE_FOLDER_ID',
+                'YANDEX_PLATFORM_ID', 'YANDEX_CORES', 'YANDEX_MEMORY_GB', 'YANDEX_DISK_GB',
+                'YANDEX_DISK_TYPE', 'YANDEX_CORE_FRACTION', 'YANDEX_PREEMPTIBLE',
+                'YANDEX_PRESET_COST_RUB',
+            ] as $k) {
+                if (!array_key_exists($k, $_POST)) {
+                    continue;
+                }
+                $config[$k] = trim((string) $_POST[$k]);
+            }
+            if (($config['YANDEX_FOLDER_ID'] ?? '') === '' || ($config['YANDEX_SUBNET_ID'] ?? '') === '') {
+                throw new \InvalidArgumentException('Нужны YANDEX_FOLDER_ID и YANDEX_SUBNET_ID');
+            }
+            if (($config['YANDEX_ZONE_ID'] ?? '') === '') {
+                $config['YANDEX_ZONE_ID'] = 'ru-central1-a';
+            }
+            if (($config['YANDEX_IMAGE_FAMILY'] ?? '') === '' && ($config['YANDEX_IMAGE_ID'] ?? '') === '') {
+                $config['YANDEX_IMAGE_FAMILY'] = 'ubuntu-2204-lts';
+            }
         } else {
-            throw new \InvalidArgumentException('provider: timeweb|selectel');
+            throw new \InvalidArgumentException('provider: timeweb|selectel|yandex');
         }
 
         return [$provider, $name, $creds, $config, $enabled];
