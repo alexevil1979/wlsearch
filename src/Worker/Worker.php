@@ -456,61 +456,61 @@ final class Worker
             }
         }
 
-        // Возраст = от самого раннего якоря (сервер/очередь), НЕ от «сейчас»
-        $candidates = [];
-        foreach (['server_created_at', 'created_at'] as $field) {
-            $raw = trim((string) ($run[$field] ?? ''));
-            if ($raw === '' || $raw === '0000-00-00 00:00:00') {
-                continue;
-            }
-            $ts = strtotime($raw);
-            if ($ts !== false && $ts > 0) {
-                $candidates[] = $ts;
-            }
+        // Возраст только по PHP time() — MySQL NOW() и PHP часто в разных TZ (якорь «в будущем» → age=0)
+        $now = time();
+        $wall = isset($meta['bootstrap_wall_start']) ? (int) $meta['bootstrap_wall_start'] : 0;
+        if ($wall <= 0 || $wall > $now + 30) {
+            // уже были неудачные probe — не сбрасываем прогресс в 0
+            $wall = !empty($meta['last_probe']) || !empty($meta['bootstrap_fail_ticks'])
+                ? $now - 120
+                : $now;
+            $meta['bootstrap_wall_start'] = $wall;
         }
-        if (isset($meta['bootstrap_at']) && (int) $meta['bootstrap_at'] > 0) {
-            $candidates[] = (int) $meta['bootstrap_at'];
-        }
-        $anchor = $candidates !== [] ? min($candidates) : time();
-        $meta['bootstrap_at'] = $anchor;
+        $age = max(0, $now - $wall);
+        $meta['bootstrap_fail_ticks'] = (int) ($meta['bootstrap_fail_ticks'] ?? 0);
         $this->saveMeta($id, $meta);
 
         $rebootAt = isset($meta['probe_reboot_at']) ? (int) $meta['probe_reboot_at'] : 0;
-        $age = max(0, time() - $anchor);
-        $ageSinceReboot = $rebootAt > 0 ? max(0, time() - $rebootAt) : null;
+        $ageSinceReboot = $rebootAt > 0 ? max(0, $now - $rebootAt) : null;
 
         $timeout = Settings::int('BOOTSTRAP_TIMEOUT_SEC', Env::int('BOOTSTRAP_TIMEOUT_SEC', 600));
         $rebootAfterSec = 60;
+        $rebootAfterTicks = 2; // ~2 тика worker без probe → reboot (независимо от TZ)
         $waitAfterRebootSec = min(300, max(120, (int) ($timeout / 2)));
 
+        $dbServerTs = strtotime((string) ($run['server_created_at'] ?? '')) ?: 0;
+        $clockSkew = $dbServerTs > 0 && $dbServerTs > $now + 60;
+
         fwrite(STDOUT, sprintf(
-            "run #%d: bs3 age=%ds server_created_at=%s created_at=%s reboot=%s serverId=%s\n",
+            "run #%d: bs5 age=%ds fail_ticks=%d skew=%s server_created_at=%s php_now=%s reboot=%s serverId=%s\n",
             $id,
             $age,
+            (int) $meta['bootstrap_fail_ticks'],
+            $clockSkew ? '1' : '0',
             (string) ($run['server_created_at'] ?? '-'),
-            (string) ($run['created_at'] ?? '-'),
+            date('Y-m-d H:i:s', $now),
             !empty($meta['probe_reboot']) ? '1' : '0',
             $serverId !== '' ? $serverId : '-'
         ));
         FileLog::write('probe', 'bootstrap:tick', [
             'run_id' => $id,
-            'code' => 'bs4',
+            'code' => 'bs5',
             'ipv4' => $ipv4,
             'age_s' => $age,
-            'anchor' => $anchor,
+            'fail_ticks' => (int) $meta['bootstrap_fail_ticks'],
+            'clock_skew' => $clockSkew,
             'server_created_at' => (string) ($run['server_created_at'] ?? ''),
-            'created_at' => (string) ($run['created_at'] ?? ''),
+            'php_now' => date('c', $now),
             'probe_reboot' => !empty($meta['probe_reboot']),
             'server_id' => $serverId,
-            'reboot_after_s' => $rebootAfterSec,
         ]);
 
-        // Сначала reboot, если уже долго нет probe (до цикла попыток)
-        if (
-            $serverId !== ''
+        $shouldReboot = $serverId !== ''
             && empty($meta['probe_reboot'])
-            && $age >= $rebootAfterSec
-        ) {
+            && ($age >= $rebootAfterSec || (int) $meta['bootstrap_fail_ticks'] >= $rebootAfterTicks);
+
+        // Сначала reboot, если уже долго нет probe (до цикла попыток)
+        if ($shouldReboot) {
             try {
                 $provider = ProviderFactory::forRun($run);
                 $didReboot = false;
@@ -525,21 +525,22 @@ final class Worker
                     $meta['probe_repush'] = 1;
                     $meta['probe_repush_at'] = date('c');
                     $didReboot = true;
-                    fwrite(STDOUT, "run #{$id}: repush cloud_init + reboot (age={$age}s)\n");
+                    fwrite(STDOUT, "run #{$id}: repush cloud_init + reboot (age={$age}s ticks={$meta['bootstrap_fail_ticks']})\n");
                 } elseif (method_exists($provider, 'rebootInstance')) {
                     $provider->rebootInstance($serverId);
                     $didReboot = true;
-                    fwrite(STDOUT, "run #{$id}: reboot after probe hang (age={$age}s)\n");
+                    fwrite(STDOUT, "run #{$id}: reboot after probe hang (age={$age}s ticks={$meta['bootstrap_fail_ticks']})\n");
                 }
                 if ($didReboot) {
                     $meta['probe_reboot'] = 1;
                     $meta['probe_reboot_at'] = time();
+                    $meta['bootstrap_fail_ticks'] = 0;
                     $this->saveMeta($id, $meta);
                     $this->pdo->prepare(
                         'UPDATE runs SET error_message = ? WHERE id = ?'
                     )->execute([
                         mb_substr(
-                            "reboot после {$age}s без probe — жду ещё ~{$waitAfterRebootSec}s",
+                            "bs5 reboot (age={$age}s) — жду ещё ~{$waitAfterRebootSec}s",
                             0,
                             500
                         ),
@@ -550,7 +551,9 @@ final class Worker
                         'ipv4' => $ipv4,
                         'server_id' => $serverId,
                         'age_s' => $age,
+                        'fail_ticks' => (int) $meta['bootstrap_fail_ticks'],
                         'provider' => (string) ($run['provider'] ?? ''),
+                        'clock_skew' => $clockSkew,
                     ]);
                     return;
                 }
@@ -586,8 +589,8 @@ final class Worker
             return;
         }
 
-        $attempts = 4;
-        $sleepSec = 5;
+        $attempts = 3;
+        $sleepSec = 4;
         $lastErr = 'no probe';
         $mode = (string) ($run['bs_mode'] ?? 'agent');
         $checker = $this->control->withLogContext([
@@ -598,7 +601,7 @@ final class Worker
         ]);
 
         for ($i = 1; $i <= $attempts; $i++) {
-            $ageNow = max(0, time() - $anchor);
+            $ageNow = max(0, time() - $wall);
             $result = $checker->withLogContext([
                 'run_id' => $id,
                 'ipv4' => $ipv4,
@@ -657,7 +660,7 @@ final class Worker
                 ? ('после reboot ' . (int) ($ageSinceReboot ?? 0) . 's')
                 : ($ageNow . 's');
             $waitMsg = sprintf(
-                'bs3 ожидание probe %s (повтор %d/%d): %s',
+                'bs5 ожидание probe %s (повтор %d/%d): %s',
                 $phase,
                 $i,
                 $attempts,
@@ -680,7 +683,10 @@ final class Worker
             }
         }
 
-        $age = max(0, time() - $anchor);
+        // тик без успеха
+        $meta['bootstrap_fail_ticks'] = (int) ($meta['bootstrap_fail_ticks'] ?? 0) + 1;
+        $this->saveMeta($id, $meta);
+        $age = max(0, time() - $wall);
         $err = $lastErr;
         $ageSinceReboot = $rebootAt > 0 ? max(0, time() - $rebootAt) : $ageSinceReboot;
 
@@ -720,11 +726,11 @@ final class Worker
             }
         }
 
-        // Если за этот тик уже пора reboot — сделаем (на случай age вырос во время попыток)
+        // после этого тика уже пора reboot
         if (
             $serverId !== ''
             && empty($meta['probe_reboot'])
-            && $age >= $rebootAfterSec
+            && ((int) $meta['bootstrap_fail_ticks'] >= $rebootAfterTicks || $age >= $rebootAfterSec)
         ) {
             try {
                 $provider = ProviderFactory::forRun($run);
@@ -732,18 +738,21 @@ final class Worker
                     $provider->rebootInstance($serverId);
                     $meta['probe_reboot'] = 1;
                     $meta['probe_reboot_at'] = time();
+                    $meta['bootstrap_fail_ticks'] = 0;
                     $this->saveMeta($id, $meta);
                     $this->pdo->prepare(
                         'UPDATE runs SET error_message = ? WHERE id = ?'
                     )->execute([
-                        mb_substr("reboot после {$age}s без probe — жду снова", 0, 500),
+                        mb_substr("bs5 reboot после fail_ticks={$meta['bootstrap_fail_ticks']} — жду снова", 0, 500),
                         $id,
                     ]);
                     FileLog::write('probe', 'bootstrap:reboot', [
                         'run_id' => $id,
                         'ipv4' => $ipv4,
                         'age_s' => $age,
+                        'fail_ticks' => (int) $meta['bootstrap_fail_ticks'],
                     ]);
+                    fwrite(STDOUT, "run #{$id}: reboot at end of tick\n");
                     return;
                 }
             } catch (\Throwable $e) {
