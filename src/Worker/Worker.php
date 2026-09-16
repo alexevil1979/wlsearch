@@ -18,6 +18,7 @@ use Wlsearch\Support\AsnLookup;
 use Wlsearch\Support\Audit;
 use Wlsearch\Support\Database;
 use Wlsearch\Support\Env;
+use Wlsearch\Support\FileLog;
 use Wlsearch\Support\Settings;
 use Wlsearch\Task\TaskService;
 
@@ -470,34 +471,67 @@ final class Worker
         $sleepSec = 8;
         $lastErr = 'no probe';
         $mode = (string) ($run['bs_mode'] ?? 'agent');
+        $checker = $this->control->withLogContext([
+            'run_id' => $id,
+            'ipv4' => $ipv4,
+            'provider' => (string) ($run['provider'] ?? ''),
+            'phase' => 'BOOTSTRAPPING',
+        ]);
 
         for ($i = 1; $i <= $attempts; $i++) {
             $age = max(0, time() - $bootstrapAt);
-            $result = $this->control->check($ipv4);
+            $result = $checker->withLogContext([
+                'run_id' => $id,
+                'ipv4' => $ipv4,
+                'provider' => (string) ($run['provider'] ?? ''),
+                'phase' => 'BOOTSTRAPPING',
+                'attempt' => $i,
+                'age_s' => $age,
+            ])->check($ipv4);
             if ($result['ok']) {
                 $this->pdo->prepare(
                     'UPDATE runs SET error_message = NULL WHERE id = ? AND state = \'BOOTSTRAPPING\''
                 )->execute([$id]);
                 $this->setState($id, 'CONTROL_CHECK');
+                FileLog::write('probe', 'bootstrap:ok', ['run_id' => $id, 'ipv4' => $ipv4, 'attempt' => $i, 'age_s' => $age]);
                 fwrite(STDOUT, "run #{$id}: probe responding → CONTROL_CHECK\n");
                 return;
             }
 
             // HTTP уже отвечает — для bsbord этого достаточно
             if (in_array($mode, ['bsbord', 'both'], true)) {
-                $httpOnly = $this->control->checkHttp($ipv4);
+                $httpOnly = $checker->withLogContext([
+                    'run_id' => $id,
+                    'ipv4' => $ipv4,
+                    'provider' => (string) ($run['provider'] ?? ''),
+                    'phase' => 'BOOTSTRAPPING_HTTP',
+                    'attempt' => $i,
+                    'age_s' => $age,
+                ])->checkHttp($ipv4);
                 if ($httpOnly['ok']) {
                     $this->pdo->prepare(
                         'UPDATE runs SET error_message = NULL WHERE id = ? AND state = \'BOOTSTRAPPING\''
                     )->execute([$id]);
                     $this->setState($id, 'CONTROL_CHECK');
+                    FileLog::write('probe', 'bootstrap:http_ok', ['run_id' => $id, 'ipv4' => $ipv4, 'attempt' => $i]);
                     fwrite(STDOUT, "run #{$id}: http probe OK (bsbord) → CONTROL_CHECK\n");
                     return;
                 }
                 $lastErr = (string) ($httpOnly['error'] ?? $result['error'] ?? 'no probe');
+                $lastDebug = $httpOnly['debug'] ?? ($result['debug'] ?? []);
             } else {
                 $lastErr = (string) ($result['error'] ?? 'no probe');
+                $lastDebug = $result['debug'] ?? [];
             }
+
+            $meta['last_probe'] = [
+                'at' => date('c'),
+                'attempt' => $i,
+                'age_s' => $age,
+                'error' => $lastErr,
+                'debug' => $lastDebug,
+            ];
+            $this->saveMeta($id, $meta);
 
             $waitMsg = sprintf(
                 'ожидание probe %ds (повтор %d/%d): %s',
@@ -509,6 +543,12 @@ final class Worker
             $this->pdo->prepare(
                 'UPDATE runs SET error_message = ? WHERE id = ? AND state = \'BOOTSTRAPPING\''
             )->execute([mb_substr($waitMsg, 0, 500), $id]);
+            FileLog::write('probe', 'bootstrap:wait', [
+                'run_id' => $id,
+                'ipv4' => $ipv4,
+                'msg' => $waitMsg,
+                'debug' => $lastDebug,
+            ]);
             fwrite(STDOUT, "run #{$id}: {$waitMsg}\n");
 
             if ($i < $attempts) {
@@ -589,6 +629,12 @@ final class Worker
                     )->execute([
                         mb_substr('reboot после таймаута probe — жду ответ снова', 0, 500),
                         $id,
+                    ]);
+                    FileLog::write('probe', 'bootstrap:reboot', [
+                        'run_id' => $id,
+                        'ipv4' => $ipv4,
+                        'server_id' => $serverId,
+                        'provider' => (string) ($run['provider'] ?? ''),
                     ]);
                     return;
                 }

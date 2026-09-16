@@ -80,13 +80,13 @@ final class HttpClient
 
     /**
      * Plain GET (for control probe).
-     * @return array{status:int, body:string, error:?string}
+     * @return array{status:int, body:string, error:?string, curl:array<string,mixed>}
      */
     public function getPlain(string $url, int $timeout = 10, bool $insecureSsl = false): array
     {
         $ch = curl_init($url);
         if ($ch === false) {
-            return ['status' => 0, 'body' => '', 'error' => 'curl_init failed'];
+            return ['status' => 0, 'body' => '', 'error' => 'curl_init failed', 'curl' => []];
         }
         $opts = [
             CURLOPT_RETURNTRANSFER => true,
@@ -104,13 +104,28 @@ final class HttpClient
         curl_setopt_array($ch, $opts);
         $body = curl_exec($ch);
         $error = curl_error($ch);
+        $errno = curl_errno($ch);
         $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $curl = [
+            'errno' => $errno,
+            'http_code' => $status,
+            'total_time' => round((float) curl_getinfo($ch, CURLINFO_TOTAL_TIME), 3),
+            'connect_time' => round((float) curl_getinfo($ch, CURLINFO_CONNECT_TIME), 3),
+            'namelookup_time' => round((float) curl_getinfo($ch, CURLINFO_NAMELOOKUP_TIME), 3),
+            'starttransfer_time' => round((float) curl_getinfo($ch, CURLINFO_STARTTRANSFER_TIME), 3),
+            'primary_ip' => (string) curl_getinfo($ch, CURLINFO_PRIMARY_IP),
+            'local_ip' => (string) curl_getinfo($ch, CURLINFO_LOCAL_IP),
+            'redirect_count' => (int) curl_getinfo($ch, CURLINFO_REDIRECT_COUNT),
+            'url' => $url,
+            'timeout' => $timeout,
+            'connecttimeout' => min(10, $timeout),
+        ];
         curl_close($ch);
 
         if ($body === false) {
-            return ['status' => 0, 'body' => '', 'error' => $error ?: 'request failed'];
+            return ['status' => 0, 'body' => '', 'error' => $error ?: 'request failed', 'curl' => $curl];
         }
-        return ['status' => $status, 'body' => $body, 'error' => null];
+        return ['status' => $status, 'body' => $body, 'error' => null, 'curl' => $curl];
     }
 
     private function proxyType(string $proxy): int

@@ -157,7 +157,10 @@ $renderRunRows = static function (array $r, string $csrf, callable $badgeClass, 
 <div class="card run-live-pin" id="live-run">
     <div class="run-live-head">
         <strong>Сейчас в работе</strong>
-        <span class="muted" style="font-size:0.8rem">дубль · автообновление ~3с</span>
+        <span class="muted" style="font-size:0.8rem">
+            дубль · автообновление ~3с ·
+            <a href="/logs?file=probe&amp;q=<?= View::e(rawurlencode('"run_id":' . (int) $liveRun['id'])) ?>">сырой probe.log</a>
+        </span>
     </div>
     <div class="table-wrap" style="margin:0">
         <table class="data">
@@ -181,6 +184,25 @@ $renderRunRows = static function (array $r, string $csrf, callable $badgeClass, 
             </tbody>
         </table>
     </div>
+    <?php
+    $liveProbeLog = $liveProbeLog ?? '';
+    $liveProbeMeta = $liveProbeMeta ?? '';
+    ?>
+    <?php if ($liveProbeMeta !== '' || $liveProbeLog !== ''): ?>
+        <details open style="margin-top:0.75rem">
+            <summary class="muted" style="cursor:pointer;font-size:0.85rem">Сырые логи probe (curl timings / body)</summary>
+            <?php if ($liveProbeMeta !== ''): ?>
+                <p class="muted" style="margin:0.4rem 0 0.2rem;font-size:0.78rem">last_probe из provider_meta:</p>
+                <pre style="white-space:pre-wrap;word-break:break-word;font-size:0.7rem;max-height:10rem;overflow:auto;margin:0;padding:0.55rem;background:var(--surface);border:1px solid var(--border);border-radius:6px"><?= View::e($liveProbeMeta) ?></pre>
+            <?php endif; ?>
+            <?php if ($liveProbeLog !== ''): ?>
+                <p class="muted" style="margin:0.55rem 0 0.2rem;font-size:0.78rem">хвост storage/logs/probe.log:</p>
+                <pre style="white-space:pre-wrap;word-break:break-word;font-size:0.7rem;max-height:14rem;overflow:auto;margin:0;padding:0.55rem;background:var(--surface);border:1px solid var(--border);border-radius:6px"><?= View::e($liveProbeLog) ?></pre>
+            <?php else: ?>
+                <p class="muted" style="margin:0.4rem 0 0">Пока нет строк в probe.log для этого run — дождитесь тика worker.</p>
+            <?php endif; ?>
+        </details>
+    <?php endif; ?>
 </div>
 <?php endif; ?>
 

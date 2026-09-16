@@ -19,11 +19,24 @@ final class RunsController
     {
         $this->requireAuth();
         $service = new RunService();
+        $live = $service->currentLiveRun();
+        $liveProbeLog = '';
+        $liveProbeMeta = '';
+        if ($live !== null) {
+            $rid = (int) $live['id'];
+            $liveProbeLog = \Wlsearch\Support\FileLog::tail('probe', 80, '"run_id":' . $rid);
+            $meta = json_decode((string) ($live['provider_meta'] ?? ''), true);
+            if (is_array($meta) && !empty($meta['last_probe'])) {
+                $liveProbeMeta = (string) json_encode($meta['last_probe'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT);
+            }
+        }
         View::render('runs/index', [
             'title' => 'Runs',
             'user' => AuthService::user(),
             'runs' => $service->listRecent(150),
-            'liveRun' => $service->currentLiveRun(),
+            'liveRun' => $live,
+            'liveProbeLog' => $liveProbeLog,
+            'liveProbeMeta' => $liveProbeMeta,
             'flash' => Flash::pull(),
             'csrf' => Csrf::field(),
             'nav' => 'runs',
