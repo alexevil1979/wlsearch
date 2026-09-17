@@ -24,15 +24,16 @@ Authorization: Bearer bsk_live_…
 { "target":"http://IP/", "dpi":"on", "operators":["…|on"], "tcp_port":80, "probes":{"tcp":true,"http":true,"icmp":false} }
 ```
 
-wlsearch дергает **HTTP :80** (решает PASS) и **HTTPS :443** (информативно; самоподписанный часто «красный» в API, на PASS не влияет).
+wlsearch дергает **HTTP :80** (решает PASS по TCP БС) и **HTTPS :443** (информативно).
 
-**PASS** (оператор БС `dpi=on`):
-- TCP `ok` / `alive` (как зелёная точка в UI)
-- HTTP status 2xx (или явный `http.ok`)
-- в теле есть `WL_PROBE_OK` (если body_head пустой, но `http.ok` — тоже ок)
-- ≥ `BSBORD_MIN_PASS` операторов **БС**
+**PASS** (= зелёная точка в UI bsbord на наших же запросах):
+- канал **БС** (`dpi=on`)
+- **TCP** `ok` / `alive` (или `leg.ok`)
+- ≥ `BSBORD_MIN_PASS` таких операторов
 
-Не засчитываем: ICMP, каналы «без БС».  
+HTTP status / `WL_PROBE_OK` пишутся в detail, но **не режут** PASS — иначе в чекере зелёный TCP, а у нас `tcp=1 http=0 marker=0` → ложный FAIL.
+
+Не засчитываем: каналы «без БС» (`dpi=off`).  
 Избранные подсети (`/favorites`) **не травятся** правилом «один FAIL_BS → вся /24».
 
 Снять ложные fail: `/checked-ips` → префикс `84.201.` → **forget fails**.

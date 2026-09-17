@@ -13,8 +13,8 @@ use Wlsearch\Support\Settings;
  * «БС» в UI bsbord = dpi=on; «без БС» = dpi=off.
  * Мы проверяем ТОЛЬКО dpi=on.
  *
- * PASS как в UI: зелёный TCP + HTTP 2xx с маркером WL_PROBE_OK.
- * Не засчитываем голый leg.ok / ICMP / «без БС».
+ * PASS = зелёная точка в «МОИ ПРОВЕРКИ»: TCP alive на канале БС.
+ * HTTP/маркер — в detail, на PASS не влияют (иначе UI green, wlsearch FAIL).
  */
 final class BsbordClient
 {
@@ -244,7 +244,9 @@ final class BsbordClient
     }
 
     /**
-     * Strict BS pass: dpi=on + TCP alive (как зелёная точка в UI) + HTTP 2xx + маркер.
+     * PASS = зелёная точка в UI bsbord: канал БС (dpi=on) + TCP alive.
+     * HTTP/маркер пишем в detail, но НЕ валят PASS — иначе UI зелёный, а wlsearch FAIL
+     * (типично: tcp=1 http=0 marker=0 при зелёном «TCP» на http://IP/).
      *
      * @param array<string, mixed> $json
      * @return array{ok:bool,operators:list<string>,marker_ok:bool,detail:string,raw:array}
@@ -271,6 +273,19 @@ final class BsbordClient
         }
 
         $byOp = is_array($targetBlock['by_operator'] ?? null) ? $targetBlock['by_operator'] : [];
+        // иногда ответ плоский: results[] / operators[]
+        if ($byOp === [] && is_array($json['results'] ?? null)) {
+            foreach ($json['results'] as $row) {
+                if (!is_array($row)) {
+                    continue;
+                }
+                $k = (string) ($row['op_key'] ?? $row['operator'] ?? '');
+                if ($k !== '') {
+                    $byOp[$k] = $row;
+                }
+            }
+        }
+
         $passed = [];
         $markerOk = false;
         $notes = [];
@@ -298,6 +313,9 @@ final class BsbordClient
             }
 
             $tcpOk = $this->isTcpOk($leg);
+            $legTruthy = $this->truthy($leg['ok'] ?? null)
+                || in_array(strtolower((string) ($leg['verdict'] ?? '')), ['ok', 'pass', 'success', 'alive'], true);
+
             $http = is_array($leg['http'] ?? null) ? $leg['http'] : null;
             $status = (int) ($http['status'] ?? $http['code'] ?? $http['status_code'] ?? 0);
             $httpTruthy = $http !== null && (
@@ -307,7 +325,6 @@ final class BsbordClient
             $httpOk = $http !== null
                 && ($httpTruthy || ($status >= 200 && $status < 400))
                 && ($status === 0 || ($status >= 200 && $status < 400));
-            // body может быть в разных полях / обрезан DPI — ищем маркер шире
             $bodyHead = (string) (
                 $http['body_head']
                 ?? $http['body']
@@ -317,26 +334,16 @@ final class BsbordClient
                 ?? ''
             );
             $hasMarker = $bodyHead !== '' && str_contains($bodyHead, $marker);
-            // Если TCP+HTTP 2xx ок, а body_head пустой (bsbord UI часто зелёный по TCP) —
-            // не режем PASS только из‑за пустого preview, если http.ok явно true.
-            if (!$hasMarker && $tcpOk && $httpOk && $status >= 200 && $status < 400
-                && $bodyHead === '' && $this->truthy($http['ok'] ?? null)
-            ) {
-                $hasMarker = true; // считаем маркер «не проверяли тело»
-            }
-
-            // PASS: TCP (как зелёная точка UI) + HTTP успех + маркер (или пустое тело при http.ok)
-            $legOk = $tcpOk && $httpOk && $hasMarker;
-            if ($hasMarker && $bodyHead !== '' && str_contains($bodyHead, $marker)) {
-                $markerOk = true;
-            } elseif ($legOk) {
+            if ($hasMarker) {
                 $markerOk = true;
             }
 
+            // Как в UI «МОИ ПРОВЕРКИ»: зелёный = TCP (или leg.ok). HTTP — бонус в логе.
+            $legOk = $tcpOk || $legTruthy;
             $short = sprintf(
                 'tcp=%s http=%s marker=%s',
                 $tcpOk ? '1' : '0',
-                $httpOk ? (string) $status : '0',
+                $httpOk ? (string) ($status > 0 ? $status : 1) : '0',
                 $hasMarker ? '1' : '0'
             );
 
@@ -349,6 +356,12 @@ final class BsbordClient
             } else {
                 $notes[] = $opKeyStr . '=fail(' . $short . ')';
             }
+        }
+
+        // Глобальный ok ответа bsbord (если есть) — тоже зелёный сигнал
+        if (count($passed) < $minPass && $this->truthy($json['ok'] ?? null)) {
+            $passed[] = 'bsbord';
+            $notes[] = 'global_ok=1';
         }
 
         $ok = count($passed) >= $minPass;
