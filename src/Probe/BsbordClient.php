@@ -5,16 +5,17 @@ declare(strict_types=1);
 namespace Wlsearch\Probe;
 
 use Wlsearch\Support\Env;
+use Wlsearch\Support\FileLog;
 use Wlsearch\Support\HttpClient;
 use Wlsearch\Support\Settings;
 
 /**
  * bsbord.com API — проверка через мобильные каналы.
- * «БС» в UI bsbord = dpi=on; «без БС» = dpi=off.
- * Мы проверяем ТОЛЬКО dpi=on.
+ * «БС» в UI = dpi=on; «без БС» = dpi=off. Только dpi=on.
  *
- * PASS = зелёная точка в «МОИ ПРОВЕРКИ»: TCP alive на канале БС.
- * HTTP/маркер — в detail, на PASS не влияют (иначе UI green, wlsearch FAIL).
+ * PASS = зелёная точка TCP в «МОИ ПРОВЕРКИ» на цель = голый IP (не http://),
+ * канал БС. Раньше слали http://IP/ и читали leg.ok/global_ok → ложный PASS,
+ * пока ручная проверка IP в UI красная.
  */
 final class BsbordClient
 {
@@ -85,9 +86,8 @@ final class BsbordClient
     }
 
     /**
-     * Probe HTTP :80 via BS (dpi=on) — основной PASS.
-     * HTTPS :443 — информативно (самоподписанный часто валит HTTP-клиент bsbord),
-     * на общий ok не влияет, если :80 уже PASS.
+     * PASS только по TCP с голого IP (как строки в UI «МОИ ПРОВЕРКИ»).
+     * Дополнительно бьём http:// для лога — на ok не влияет.
      *
      * @return array{
      *   ok: bool,
@@ -111,46 +111,71 @@ final class BsbordClient
             throw new \RuntimeException('Нет операторов БС (dpi=on) для проверки — выберите в Настройках');
         }
 
-        $httpRes = $this->probeTarget('http://' . $ipv4 . '/', 80, $operators, $ipv4, $marker);
-        $httpsRes = $this->probeTarget('https://' . $ipv4 . '/', 443, $operators, $ipv4, $marker);
-
-        // PASS = HTTP :80. HTTPS не блокирует (в UI часто зелёный только TCP).
-        $ok = $httpRes['ok'];
-        $ops = array_values(array_unique(array_merge($httpRes['operators'], $httpsRes['operators'])));
-        $detail = sprintf(
-            'http[%s] https[%s%s]',
-            $httpRes['detail'],
-            $httpsRes['detail'],
-            $httpsRes['ok'] ? '' : ' (игнор для PASS)'
+        // Как в UI: цель = IP, пробы TCP (порт 80) — зелёная/красная точка
+        $tcpRes = $this->probeTarget(
+            $ipv4,
+            80,
+            $operators,
+            $ipv4,
+            $marker,
+            ['icmp' => false, 'tcp' => true, 'http' => false]
         );
+
+        // Для лога / маркера — не решает PASS
+        $httpRes = $this->probeTarget(
+            'http://' . $ipv4 . '/',
+            80,
+            $operators,
+            $ipv4,
+            $marker,
+            ['icmp' => false, 'tcp' => true, 'http' => true]
+        );
+
+        $ok = $tcpRes['ok'];
+        $ops = $tcpRes['operators'];
+        $detail = sprintf(
+            'tcp-ip[%s] http-url[%s]',
+            $tcpRes['detail'],
+            $httpRes['detail']
+        );
+
+        FileLog::write('bsbord', $ok ? 'probe:pass' : 'probe:fail', [
+            'ipv4' => $ipv4,
+            'operators_req' => $operators,
+            'ops_pass' => $ops,
+            'detail' => $detail,
+        ]);
 
         return [
             'ok' => $ok,
             'operators' => $ops,
-            'marker_ok' => $httpRes['marker_ok'] || $httpsRes['marker_ok'],
+            'marker_ok' => $httpRes['marker_ok'],
             'detail' => ($ok ? 'bsbord БС PASS ' : 'bsbord БС FAIL ') . $detail,
             'raw' => [
-                'http' => $httpRes['raw'],
-                'https' => $httpsRes['raw'],
+                'tcp_ip' => $tcpRes['raw'],
+                'http_url' => $httpRes['raw'],
             ],
         ];
     }
 
     /**
      * @param list<string> $operators
+     * @param array{icmp:bool,tcp:bool,http:bool} $probes
      * @return array{ok:bool,operators:list<string>,marker_ok:bool,detail:string,raw:array}
      */
-    private function probeTarget(string $target, int $tcpPort, array $operators, string $ipv4, string $marker): array
-    {
+    private function probeTarget(
+        string $target,
+        int $tcpPort,
+        array $operators,
+        string $ipv4,
+        string $marker,
+        array $probes
+    ): array {
         $body = [
             'target' => $target,
             'dpi' => 'on',
             'operators' => $operators,
-            'probes' => [
-                'icmp' => false,
-                'tcp' => true,
-                'http' => true,
-            ],
+            'probes' => $probes,
             'tcp_port' => $tcpPort,
         ];
 
@@ -173,7 +198,8 @@ final class BsbordClient
             throw new \RuntimeException('bsbord: invalid JSON for ' . $target);
         }
 
-        $out = $this->interpret($json, $ipv4, $marker, $target);
+        $wantHttp = !empty($probes['http']);
+        $out = $this->interpret($json, $ipv4, $marker, $target, $operators, $wantHttp);
         $out['detail'] = $tcpPort . ':' . $out['detail'];
         return $out;
     }
@@ -244,15 +270,17 @@ final class BsbordClient
     }
 
     /**
-     * PASS = зелёная точка в UI bsbord: канал БС (dpi=on) + TCP alive.
-     * HTTP/маркер пишем в detail, но НЕ валят PASS — иначе UI зелёный, а wlsearch FAIL
-     * (типично: tcp=1 http=0 marker=0 при зелёном «TCP» на http://IP/).
-     *
-     * @param array<string, mixed> $json
+     * @param list<string> $requestedOps
      * @return array{ok:bool,operators:list<string>,marker_ok:bool,detail:string,raw:array}
      */
-    private function interpret(array $json, string $ipv4, string $marker, string $target): array
-    {
+    private function interpret(
+        array $json,
+        string $ipv4,
+        string $marker,
+        string $target,
+        array $requestedOps,
+        bool $wantHttp
+    ): array {
         $byTarget = $json['by_target'] ?? [];
         $targetBlock = null;
         if (is_array($byTarget)) {
@@ -260,6 +288,18 @@ final class BsbordClient
                 if (isset($byTarget[$k]) && is_array($byTarget[$k])) {
                     $targetBlock = $byTarget[$k];
                     break;
+                }
+            }
+            if ($targetBlock === null) {
+                foreach ($byTarget as $key => $block) {
+                    if (!is_array($block)) {
+                        continue;
+                    }
+                    // совпадение по IP внутри ключа
+                    if (is_string($key) && str_contains($key, $ipv4)) {
+                        $targetBlock = $block;
+                        break;
+                    }
                 }
             }
             if ($targetBlock === null) {
@@ -273,7 +313,6 @@ final class BsbordClient
         }
 
         $byOp = is_array($targetBlock['by_operator'] ?? null) ? $targetBlock['by_operator'] : [];
-        // иногда ответ плоский: results[] / operators[]
         if ($byOp === [] && is_array($json['results'] ?? null)) {
             foreach ($json['results'] as $row) {
                 if (!is_array($row)) {
@@ -286,6 +325,7 @@ final class BsbordClient
             }
         }
 
+        $requestedSet = array_fill_keys($requestedOps, true);
         $passed = [];
         $markerOk = false;
         $notes = [];
@@ -297,6 +337,20 @@ final class BsbordClient
             }
 
             $opKeyStr = (string) $opKey;
+            // только запрошенные операторы (не чужие ключи из ответа)
+            if ($requestedSet !== [] && !isset($requestedSet[$opKeyStr])) {
+                $matched = false;
+                foreach ($requestedOps as $req) {
+                    if ($req === $opKeyStr || str_starts_with($opKeyStr, explode('|', $req)[0] . '|')) {
+                        $matched = true;
+                        break;
+                    }
+                }
+                if (!$matched) {
+                    continue;
+                }
+            }
+
             $dpi = strtolower((string) ($leg['dpi'] ?? ''));
             if ($dpi === '') {
                 if (str_ends_with(strtolower($opKeyStr), '|off')) {
@@ -307,39 +361,36 @@ final class BsbordClient
                     $dpi = 'on';
                 }
             }
-            if ($dpi !== 'on') {
+            if ($dpi !== '' && $dpi !== 'on') {
                 $notes[] = $opKeyStr . '=skip-no-bs';
                 continue;
             }
 
             $tcpOk = $this->isTcpOk($leg);
-            $legTruthy = $this->truthy($leg['ok'] ?? null)
-                || in_array(strtolower((string) ($leg['verdict'] ?? '')), ['ok', 'pass', 'success', 'alive'], true);
-
             $http = is_array($leg['http'] ?? null) ? $leg['http'] : null;
             $status = (int) ($http['status'] ?? $http['code'] ?? $http['status_code'] ?? 0);
-            $httpTruthy = $http !== null && (
-                $this->truthy($http['ok'] ?? null)
-                || in_array(strtolower((string) ($http['verdict'] ?? '')), ['ok', 'pass', 'success', 'alive'], true)
-            );
-            $httpOk = $http !== null
-                && ($httpTruthy || ($status >= 200 && $status < 400))
-                && ($status === 0 || ($status >= 200 && $status < 400));
             $bodyHead = (string) (
                 $http['body_head']
                 ?? $http['body']
                 ?? $http['response_body']
                 ?? $http['preview']
-                ?? $leg['body_head']
                 ?? ''
             );
             $hasMarker = $bodyHead !== '' && str_contains($bodyHead, $marker);
             if ($hasMarker) {
                 $markerOk = true;
             }
+            $httpOk = $http !== null && (
+                $this->truthy($http['ok'] ?? null)
+                || ($status >= 200 && $status < 400)
+            );
 
-            // Как в UI «МОИ ПРОВЕРКИ»: зелёный = TCP (или leg.ok). HTTP — бонус в логе.
-            $legOk = $tcpOk || $legTruthy;
+            // PASS = только зелёный TCP (как в UI). Без leg.ok / global_ok.
+            $legOk = $tcpOk;
+            if ($wantHttp && $legOk && !$httpOk && !$hasMarker) {
+                // для http-url пробы: TCP зелёный, но HTTP мёртв — в detail, ok по TCP всё равно
+            }
+
             $short = sprintf(
                 'tcp=%s http=%s marker=%s',
                 $tcpOk ? '1' : '0',
@@ -356,12 +407,6 @@ final class BsbordClient
             } else {
                 $notes[] = $opKeyStr . '=fail(' . $short . ')';
             }
-        }
-
-        // Глобальный ok ответа bsbord (если есть) — тоже зелёный сигнал
-        if (count($passed) < $minPass && $this->truthy($json['ok'] ?? null)) {
-            $passed[] = 'bsbord';
-            $notes[] = 'global_ok=1';
         }
 
         $ok = count($passed) >= $minPass;
@@ -388,7 +433,10 @@ final class BsbordClient
         if (array_key_exists('ok', $tcp)) {
             return $this->truthy($tcp['ok']);
         }
-        $verdict = strtolower((string) ($tcp['verdict'] ?? ''));
+        if (array_key_exists('alive', $tcp)) {
+            return $this->truthy($tcp['alive']);
+        }
+        $verdict = strtolower((string) ($tcp['verdict'] ?? $tcp['status'] ?? ''));
         return in_array($verdict, ['alive', 'ok', 'open', 'pass', 'success'], true);
     }
 

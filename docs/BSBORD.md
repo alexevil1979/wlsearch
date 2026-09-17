@@ -24,16 +24,16 @@ Authorization: Bearer bsk_live_…
 { "target":"http://IP/", "dpi":"on", "operators":["…|on"], "tcp_port":80, "probes":{"tcp":true,"http":true,"icmp":false} }
 ```
 
-wlsearch дергает **HTTP :80** (решает PASS по TCP БС) и **HTTPS :443** (информативно).
+wlsearch бьёт bsbord так же, как строки в UI «МОИ ПРОВЕРКИ»:
 
-**PASS** (= зелёная точка в UI bsbord на наших же запросах):
-- канал **БС** (`dpi=on`)
-- **TCP** `ok` / `alive` (или `leg.ok`)
-- ≥ `BSBORD_MIN_PASS` таких операторов
+1. **Цель = голый IP**, проба **TCP :80**, `dpi=on` → это решает **PASS/FAIL** (зелёная/красная точка).
+2. Дополнительно `http://IP/` для лога/маркера — на PASS не влияет.
 
-HTTP status / `WL_PROBE_OK` пишутся в detail, но **не режут** PASS — иначе в чекере зелёный TCP, а у нас `tcp=1 http=0 marker=0` → ложный FAIL.
+Раньше слали только `http://IP/` и засчитывали `leg.ok` / `global_ok` → в wlsearch PASS, а в UI на том же IP красный TCP.
 
-Не засчитываем: каналы «без БС» (`dpi=off`).  
-Избранные подсети (`/favorites`) **не травятся** правилом «один FAIL_BS → вся /24».
+**PASS:** ≥ `BSBORD_MIN_PASS` операторов БС с **TCP ok**.  
+Не засчитываем: «без БС», ICMP, чужие операторы из ответа.
 
-Снять ложные fail: `/checked-ips` → префикс `84.201.` → **forget fails**.
+Избранные (`/favorites`) не травятся /24.  
+Ложные fail: `/checked-ips` → `84.201.` → forget fails.  
+Ложный PASS (как #213): forget этот IP в Checked IPs и при необходимости destroy VM.
