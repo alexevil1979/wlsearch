@@ -2,6 +2,8 @@
 
 Практическая инструкция по опыту проекта: что сделать в [консоли Yandex Cloud](https://console.yandex.cloud/), **откуда взять ID**, **куда вставить в админке** wlsearch (`/accounts`).
 
+**Ручной режим (без wlsearch):** создать VM, статический IP, проверка BS — [YANDEX_MANUAL_VM_STATIC_BS.md](YANDEX_MANUAL_VM_STATIC_BS.md).
+
 Консоль: https://console.yandex.cloud/  
 Админка аккаунтов: https://wlsearch.1tlt.ru/accounts (или ваш хост `/accounts`)
 
