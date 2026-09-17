@@ -39,6 +39,32 @@ $defaultRegionValue = match ($preferredProvider) {
     'selectel' => (string) ($defaultSelectelRegion ?? 'ru-9a'),
     default => (string) ($defaultRegion ?? 'spb-3'),
 };
+$yandexZones = ['ru-central1-a', 'ru-central1-b', 'ru-central1-d', 'ru-central1-e'];
+foreach ($yandexAccounts as $a) {
+    $cfg = json_decode((string) ($a['config_json'] ?? ''), true);
+    if (!is_array($cfg)) {
+        continue;
+    }
+    $z = trim((string) ($cfg['YANDEX_ZONE_ID'] ?? ''));
+    if ($z !== '' && !in_array($z, $yandexZones, true)) {
+        $yandexZones[] = $z;
+    }
+}
+$timewebZones = ['spb-3', 'spb-1', 'spb-2', 'msk-1', 'nsk-1'];
+$twDef = (string) ($defaultRegion ?? 'spb-3');
+if ($twDef !== '' && !in_array($twDef, $timewebZones, true)) {
+    $timewebZones[] = $twDef;
+}
+$selectelZones = ['ru-9a', 'ru-1a', 'ru-2a', 'ru-3a', 'ru-7a'];
+$selDef = (string) ($defaultSelectelRegion ?? 'ru-9a');
+if ($selDef !== '' && !in_array($selDef, $selectelZones, true)) {
+    $selectelZones[] = $selDef;
+}
+$regionsByProvider = [
+    'yandex' => $yandexZones,
+    'timeweb' => $timewebZones,
+    'selectel' => $selectelZones,
+];
 ?>
 <h1>Запуск прогона</h1>
 <p class="muted">
@@ -55,8 +81,7 @@ $defaultRegionValue = match ($preferredProvider) {
         <?= $csrf ?>
 
         <label for="provider">Provider</label>
-        <select id="provider" name="provider" required
-                onchange="(function(v){['tw','sel','yc'].forEach(function(x){var el=document.getElementById('acc-'+x);if(!el)return;el.style.display='none';el.querySelectorAll('input[type=checkbox]').forEach(function(c){c.disabled=true;});});var map={timeweb:'tw',selectel:'sel',yandex:'yc'};var id=map[v];var box=document.getElementById('acc-'+id);if(box){box.style.display='block';box.querySelectorAll('input[type=checkbox]').forEach(function(c){c.disabled=c.dataset.off==='1';});}var reg={timeweb:<?= json_encode((string) ($defaultRegion ?? 'spb-3')) ?>,selectel:<?= json_encode((string) ($defaultSelectelRegion ?? 'ru-9a')) ?>,yandex:<?= json_encode((string) ($defaultYandexRegion ?? 'ru-central1-a')) ?>};var r=document.getElementById('region');if(r&&reg[v])r.value=reg[v];})(this.value)">
+        <select id="provider" name="provider" required>
             <option value="yandex" <?= $preferredProvider === 'yandex' ? 'selected' : '' ?> <?= $yandexConfigured ? '' : 'disabled' ?>>yandex <?= $yandexConfigured ? '' : '(не настроен)' ?></option>
             <option value="timeweb" <?= $preferredProvider === 'timeweb' ? 'selected' : '' ?> <?= $timewebConfigured ? '' : 'disabled' ?>>timeweb <?= $timewebConfigured ? '' : '(не настроен)' ?></option>
             <option value="selectel" <?= $preferredProvider === 'selectel' ? 'selected' : '' ?> <?= $selectelConfigured ? '' : 'disabled' ?>>selectel <?= $selectelConfigured ? '' : '(не настроен)' ?></option>
@@ -123,10 +148,21 @@ $defaultRegionValue = match ($preferredProvider) {
             <?php endif; ?>
         </div>
 
-        <label for="region">Region / AZ (опц.)</label>
-        <input id="region" name="region" type="text"
-               value="<?= View::e($defaultRegionValue) ?>"
-               placeholder="ru-central1-a / spb-3 / ru-9a">
+        <label for="region">Zone / Region</label>
+        <select id="region" name="region" required>
+            <?php
+            $opts = $regionsByProvider[$preferredProvider] ?? $yandexZones;
+            foreach ($opts as $z):
+            ?>
+                <option value="<?= View::e($z) ?>" <?= $defaultRegionValue === $z ? 'selected' : '' ?>><?= View::e($z) ?></option>
+            <?php endforeach; ?>
+            <?php if ($defaultRegionValue !== '' && !in_array($defaultRegionValue, $opts, true)): ?>
+                <option value="<?= View::e($defaultRegionValue) ?>" selected><?= View::e($defaultRegionValue) ?></option>
+            <?php endif; ?>
+        </select>
+        <p class="muted" style="margin:0.25rem 0 0;font-size:0.8rem">
+            Для Yandex зона должна совпадать с subnet аккаунта в <a href="/accounts">Аккаунты</a>.
+        </p>
 
         <label for="bs_mode">BS-проверка</label>
         <select id="bs_mode" name="bs_mode" required>
