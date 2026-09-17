@@ -57,7 +57,10 @@ final class YandexCloudProvider implements ProviderInterface
         if ($zone === '') {
             $zone = 'ru-central1-a';
         }
-        $subnetId = $this->cfg->require('YANDEX_SUBNET_ID');
+        $subnetId = (string) ($opts['subnet_id'] ?? '');
+        if ($subnetId === '') {
+            $subnetId = $this->cfg->require('YANDEX_SUBNET_ID');
+        }
         $imageId = $this->resolveImageId();
         $cores = max(2, $this->cfg->int('YANDEX_CORES', 2));
         $memoryGb = max(1, $this->cfg->int('YANDEX_MEMORY_GB', 2));
@@ -65,6 +68,15 @@ final class YandexCloudProvider implements ProviderInterface
         $platform = $this->cfg->get('YANDEX_PLATFORM_ID', 'standard-v3') ?? 'standard-v3';
         $coreFraction = max(5, min(100, $this->cfg->int('YANDEX_CORE_FRACTION', 100)));
         $preemptible = $this->cfg->bool('YANDEX_PREEMPTIBLE', true);
+
+        $natSpec = ['ipVersion' => 'IPV4'];
+        $natAddress = trim((string) ($opts['nat_address'] ?? ''));
+        if ($natAddress !== '') {
+            if (!filter_var($natAddress, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+                throw new \RuntimeException('Yandex create: invalid nat_address');
+            }
+            $natSpec['address'] = $natAddress;
+        }
 
         $body = [
             'folderId' => $folderId,
@@ -89,9 +101,7 @@ final class YandexCloudProvider implements ProviderInterface
                 [
                     'subnetId' => $subnetId,
                     'primaryV4AddressSpec' => [
-                        'oneToOneNatSpec' => [
-                            'ipVersion' => 'IPV4',
-                        ],
+                        'oneToOneNatSpec' => $natSpec,
                     ],
                 ],
             ],
@@ -113,6 +123,7 @@ final class YandexCloudProvider implements ProviderInterface
             'cores' => $cores,
             'memory_gb' => $memoryGb,
             'preemptible' => $preemptible,
+            'nat_address' => $natAddress !== '' ? $natAddress : null,
             'name' => $body['name'],
             'account' => $this->cfg->logTag(),
         ]);
@@ -284,6 +295,173 @@ final class YandexCloudProvider implements ProviderInterface
             $body
         );
         $this->waitOperation($op);
+    }
+
+    /**
+     * Переустановка ОС: резерв публичного IP → detach NAT → destroy VM → create с тем же IP.
+     * Старый диск удаляется (autoDelete), адрес VPC не трогаем.
+     */
+    public function reinstallOsKeepingIp(string $serverId, string $cloudInit, string $newName): ServerInfo
+    {
+        $inst = $this->api(
+            'GET',
+            'https://compute.api.cloud.yandex.net/compute/v1/instances/' . rawurlencode($serverId)
+        );
+        $publicIp = $this->extractPublicIpv4($inst);
+        if ($publicIp === null || $publicIp === '') {
+            throw new \RuntimeException('Yandex reinstall: нет публичного IP на VM');
+        }
+        $zone = (string) ($inst['zoneId'] ?? $this->cfg->get('YANDEX_ZONE_ID', 'ru-central1-a'));
+        $subnetId = '';
+        $nicIndex = '0';
+        $internal = null;
+        foreach ($inst['networkInterfaces'] ?? [] as $i => $nic) {
+            if (!is_array($nic)) {
+                continue;
+            }
+            $nat = $nic['primaryV4Address']['oneToOneNat']['address'] ?? null;
+            if (is_string($nat) && $nat === $publicIp) {
+                $subnetId = (string) ($nic['subnetId'] ?? '');
+                $nicIndex = (string) ($nic['index'] ?? $i);
+                $internal = $nic['primaryV4Address']['address'] ?? null;
+                break;
+            }
+        }
+        if ($subnetId === '') {
+            $subnetId = (string) (($inst['networkInterfaces'][0]['subnetId'] ?? '') ?: $this->cfg->require('YANDEX_SUBNET_ID'));
+        }
+
+        FileLog::write('yandex', 'os_reinstall:start', [
+            'old_instance' => $serverId,
+            'public_ip' => $publicIp,
+            'zone' => $zone,
+            'subnet' => $subnetId,
+            'account' => $this->cfg->logTag(),
+        ]);
+
+        // 1) сделать IP статическим, пока ещё привязан
+        $this->ensurePublicAddressReserved($publicIp, $zone);
+        (new \Wlsearch\ProtectedIp\ProtectedIpService())->protect(
+            $publicIp,
+            'os_reinstall',
+            null,
+            'keep IP across OS reinstall'
+        );
+
+        // 2) отвязать NAT (Address остаётся в VPC)
+        try {
+            $body = ['networkInterfaceIndex' => $nicIndex];
+            if (is_string($internal) && $internal !== '') {
+                $body['internalAddress'] = $internal;
+            }
+            $op = $this->api(
+                'POST',
+                'https://compute.api.cloud.yandex.net/compute/v1/instances/'
+                . rawurlencode($serverId) . ':removeOneToOneNat',
+                $body
+            );
+            $this->waitOperation($op);
+            FileLog::write('yandex', 'os_reinstall:nat_detached', [
+                'instance_id' => $serverId,
+                'public_ip' => $publicIp,
+            ]);
+        } catch (\Throwable $e) {
+            // уже отвязан / нет NAT
+            FileLog::write('yandex', 'os_reinstall:nat_detach_warn', [
+                'instance_id' => $serverId,
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        // 3) удалить старую VM (IP protected → destroy не удалит Address)
+        $this->destroy($serverId);
+
+        // 4) новая VM с тем же публичным IP + свежий cloud-init
+        $info = $this->create([
+            'name' => $newName,
+            'region' => $zone,
+            'subnet_id' => $subnetId,
+            'nat_address' => $publicIp,
+            'cloud_init' => $cloudInit,
+            'comment' => 'wlsearch OS reinstall keep ip=' . $publicIp,
+        ]);
+
+        if ($info->ipv4 && $info->ipv4 !== $publicIp) {
+            FileLog::write('yandex', 'os_reinstall:ip_mismatch', [
+                'expected' => $publicIp,
+                'got' => $info->ipv4,
+                'new_instance' => $info->id,
+            ]);
+            throw new \RuntimeException(
+                'OS reinstall: IP сменился! expected=' . $publicIp . ' got=' . $info->ipv4
+            );
+        }
+
+        FileLog::write('yandex', 'os_reinstall:done', [
+            'old_instance' => $serverId,
+            'new_instance' => $info->id,
+            'public_ip' => $publicIp,
+        ]);
+        return $info;
+    }
+
+    /** Сделать ephemeral public IP статическим (reserved), чтобы не потерять при destroy. */
+    private function ensurePublicAddressReserved(string $ipv4, string $zoneId): void
+    {
+        $folderId = $this->cfg->require('YANDEX_FOLDER_ID');
+        $pageToken = null;
+        $found = null;
+        for ($page = 0; $page < 20; $page++) {
+            $url = 'https://vpc.api.cloud.yandex.net/vpc/v1/addresses?folderId='
+                . rawurlencode($folderId) . '&pageSize=100';
+            if ($pageToken) {
+                $url .= '&pageToken=' . rawurlencode($pageToken);
+            }
+            $json = $this->api('GET', $url);
+            foreach ($json['addresses'] ?? [] as $row) {
+                if (!is_array($row)) {
+                    continue;
+                }
+                $ext = (string) ($row['externalIpv4Address']['address'] ?? '');
+                if ($ext === $ipv4) {
+                    $found = $row;
+                    break 2;
+                }
+            }
+            $pageToken = $json['nextPageToken'] ?? null;
+            if (!$pageToken) {
+                break;
+            }
+        }
+        if ($found === null) {
+            throw new \RuntimeException(
+                'Yandex: VPC Address для ' . $ipv4 . ' не найден — нельзя безопасно переустановить ОС'
+            );
+        }
+        $addressId = (string) ($found['id'] ?? '');
+        $reserved = !empty($found['reserved']);
+        FileLog::write('yandex', 'os_reinstall:address', [
+            'address_id' => $addressId,
+            'ipv4' => $ipv4,
+            'reserved' => $reserved,
+            'zone' => $zoneId,
+        ]);
+        if ($reserved || $addressId === '') {
+            return;
+        }
+        $op = $this->api(
+            'PATCH',
+            'https://vpc.api.cloud.yandex.net/vpc/v1/addresses/' . rawurlencode($addressId),
+            [
+                'updateMask' => 'reserved',
+                'reserved' => true,
+            ]
+        );
+        $this->waitOperation($op);
+        FileLog::write('yandex', 'os_reinstall:address_reserved', [
+            'address_id' => $addressId,
+            'ipv4' => $ipv4,
+        ]);
     }
 
     /** Restart VM (probe hang recovery). */

@@ -784,6 +784,107 @@ final class RunService
             . 'VM reboot ~1–2 мин. В serial console логин: wl (не root), потом sudo -i';
     }
 
+    /**
+     * Переустановка ОС с сохранением публичного IP (Yandex: reserve → recreate).
+     */
+    public function reinstallOs(int $runId, string $actor): string
+    {
+        $run = $this->get($runId);
+        if ($run === null) {
+            throw new \RuntimeException('Run not found');
+        }
+        $serverId = (string) ($run['provider_server_id'] ?? '');
+        $ipv4 = (string) ($run['ipv4'] ?? '');
+        if ($serverId === '') {
+            throw new \RuntimeException('Нет provider_server_id');
+        }
+        if ($ipv4 === '') {
+            throw new \RuntimeException('Нет IP — нельзя гарантировать сохранение адреса');
+        }
+        if (in_array((string) $run['state'], ['DESTROYED', 'DESTROYING', 'ORDERING'], true)) {
+            throw new \RuntimeException('Run в состоянии ' . $run['state']);
+        }
+        if ((string) ($run['provider'] ?? '') !== 'yandex') {
+            throw new \RuntimeException('Переустановка ОС с сохранением IP пока только для Yandex');
+        }
+
+        $provider = ProviderFactory::forRun($run);
+        if (!method_exists($provider, 'reinstallOsKeepingIp')) {
+            throw new \RuntimeException('Провайдер не поддерживает OS reinstall');
+        }
+
+        $pass = \Wlsearch\Probe\CloudInitBuilder::DEFAULT_ROOT_PASSWORD;
+        $cloudInit = \Wlsearch\Probe\CloudInitBuilder::forRun(
+            'yandex',
+            $runId,
+            $pass
+        );
+        $newName = sprintf('wlsearch-%d-os%s', $runId, date('His'));
+
+        @set_time_limit(600);
+        /** @var \Wlsearch\Provider\ServerInfo $info */
+        $info = $provider->reinstallOsKeepingIp($serverId, $cloudInit, $newName);
+
+        if ($info->ipv4 && $info->ipv4 !== $ipv4) {
+            throw new \RuntimeException('IP сменился: был ' . $ipv4 . ', стал ' . $info->ipv4);
+        }
+
+        (new \Wlsearch\ProtectedIp\ProtectedIpService($this->pdo))->protect(
+            $ipv4,
+            'os_reinstall',
+            $runId,
+            'OS reinstall keep IP'
+        );
+
+        $meta = [];
+        if (!empty($run['provider_meta'])) {
+            $decoded = json_decode((string) $run['provider_meta'], true);
+            if (is_array($decoded)) {
+                $meta = $decoded;
+            }
+        }
+        $meta['root_password'] = $pass;
+        $meta['os_reinstall_at'] = date('c');
+        $meta['os_reinstall_by'] = $actor;
+        $meta['os_reinstall_prev_server'] = $serverId;
+        $meta['os_reinstall_keep_ip'] = $ipv4;
+        unset(
+            $meta['probe_reboot'],
+            $meta['probe_reinstall'],
+            $meta['probe_os_reinstall'],
+            $meta['bootstrap_fail_ticks'],
+            $meta['bootstrap_wall_start'],
+            $meta['last_probe'],
+            $meta['last_ping']
+        );
+        $meta['bootstrap_wall_start'] = time();
+
+        $this->pdo->prepare(
+            "UPDATE runs SET provider_server_id = ?, ipv4 = ?, provider_meta = ?,
+                    state = 'BOOTSTRAPPING', keep_on_fail = 1, verdict = NULL,
+                    error_message = ?, server_created_at = NOW(), updated_at = NOW()
+             WHERE id = ?"
+        )->execute([
+            $info->id,
+            $ipv4,
+            json_encode($meta, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+            mb_substr('OS reinstall — IP сохранён ' . $ipv4 . ', жду probe (логин wl)', 0, 500),
+            $runId,
+        ]);
+
+        Audit::log($actor, 'run.os_reinstall', 'run', (string) $runId, [
+            'ipv4' => $ipv4,
+            'old_server' => $serverId,
+            'new_server' => $info->id,
+        ]);
+        $this->tg->send(
+            "wlsearch: OS reinstall run #{$runId} ip={$ipv4} (сохранён)\n"
+            . "new={$info->id} — login wl / {$pass}"
+        );
+
+        return "ОС переустановлена, IP {$ipv4} сохранён. Serial: wl / {$pass}. Ждём probe.";
+    }
+
     /** @return array<string, mixed>|null */
     public function get(int $id): ?array
     {

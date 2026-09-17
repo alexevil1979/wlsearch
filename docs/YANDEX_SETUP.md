@@ -194,7 +194,8 @@ IP сразу в protected; destroy VM при fail/OS-reinstall для избр�
 
 По умолчанию пароль: **`qweasd333123`**.  
 В **serial console** логин: **`wl`** (не `root` — Yandex/Ubuntu root часто locked).  
-После входа: `sudo -i`. Кнопка **root** в Runs → cloud-init + reboot (~1–2 мин).
+После входа: `sudo -i`. Кнопка **root** в Runs → cloud-init + reboot (~1–2 мин).  
+Кнопка **OS** → полная переустановка диска, **публичный IP сохраняется** (reserve → recreate).
 
 ---
 

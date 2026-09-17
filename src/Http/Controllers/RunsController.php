@@ -201,6 +201,11 @@ final class RunsController
         $this->action((int) $id, 'set_root_password');
     }
 
+    public function reinstallOs(string $id): void
+    {
+        $this->action((int) $id, 'reinstall_os');
+    }
+
     private function action(int $id, string $action): void
     {
         $this->requireAuth();
@@ -220,9 +225,10 @@ final class RunsController
                 'retry_control' => $service->retryControl($id, $actor),
                 'retry_bs' => Flash::set('ok', $service->retryBs($id, $actor)),
                 'set_root_password' => Flash::set('ok', $service->setRootPassword($id, $actor)),
+                'reinstall_os' => Flash::set('ok', $service->reinstallOs($id, $actor)),
                 default => throw new \InvalidArgumentException('unknown action'),
             };
-            if (!in_array($action, ['retry_bs', 'set_root_password'], true)) {
+            if (!in_array($action, ['retry_bs', 'set_root_password', 'reinstall_os'], true)) {
                 Flash::set('ok', "Действие {$action} для run #{$id} принято.");
             }
         } catch (\Throwable $e) {

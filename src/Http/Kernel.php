@@ -80,6 +80,7 @@ final class Kernel
         $router->post('/runs/{id}/retry-control', [$runs, 'retryControl']);
         $router->post('/runs/{id}/retry-bs', [$runs, 'retryBs']);
         $router->post('/runs/{id}/set-root-password', [$runs, 'setRootPassword']);
+        $router->post('/runs/{id}/reinstall-os', [$runs, 'reinstallOs']);
 
         $router->get('/inventory', [$inventory, 'index']);
         $router->post('/inventory/{id}/retire', [$inventory, 'retire']);

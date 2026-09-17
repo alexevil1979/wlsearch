@@ -33,6 +33,7 @@ $renderRunRows = static function (array $r, string $csrf, callable $badgeClass, 
         && !in_array($state, ['DESTROYED', 'DESTROYING', 'ORDERING', 'PROVISIONING'], true);
     $canSetRoot = !empty($r['provider_server_id'])
         && !in_array($state, ['DESTROYED', 'DESTROYING', 'ORDERING'], true);
+    $canReinstallOs = $canSetRoot && (string) ($r['provider'] ?? '') === 'yandex' && !empty($r['ipv4']);
     $defaultRootPass = \Wlsearch\Probe\CloudInitBuilder::DEFAULT_ROOT_PASSWORD;
     $loginUser = \Wlsearch\Probe\CloudInitBuilder::LOGIN_USER;
     $probeHint = '';
@@ -148,6 +149,14 @@ $renderRunRows = static function (array $r, string $csrf, callable $badgeClass, 
                                     <?= $csrf ?>
                                     <button class="btn btn-secondary btn-sm" type="submit"
                                             title="Пароль <?= View::e($loginUser) ?>/root <?= View::e($defaultRootPass) ?> + reboot">root</button>
+                                </form>
+                            <?php endif; ?>
+                            <?php if ($canReinstallOs): ?>
+                                <form method="post" action="/runs/<?= $id ?>/reinstall-os"
+                                      onsubmit="return confirm('Переустановить ОС?\nПубличный IP <?= View::e((string) $r['ipv4']) ?> СОХРАНИТСЯ (static).\nСтарый диск удалится. ~2–5 мин.')">
+                                    <?= $csrf ?>
+                                    <button class="btn btn-danger btn-sm" type="submit"
+                                            title="Переустановка ОС, IP сохраняется">OS</button>
                                 </form>
                             <?php endif; ?>
                         </div>
