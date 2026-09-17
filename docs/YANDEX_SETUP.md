@@ -62,6 +62,8 @@
 4. Зону этой подсети → в wlsearch **Zone** (`ru-central1-a`).  
    **Subnet и Zone должны совпадать.**
 
+В `/accounts` проще: селект **Zone** + кнопка **«Загрузить подсети»** (Folder + SA JSON) → выбрать подсеть из списка — Zone и Subnet id подставятся сами.
+
 ### Security Group (чтобы probe :80 не таймаутился)
 
 По опыту: ICMP может пинговаться, а **TCP 80** — timeout (`errno 28`), если SG режет вход.
