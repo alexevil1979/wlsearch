@@ -136,6 +136,48 @@ final class AccountsController
         exit;
     }
 
+    /** AJAX: список подсетей Yandex для селекта (по account_id или folder+JSON). */
+    public function yandexSubnets(): void
+    {
+        $this->auth();
+        header('Content-Type: application/json; charset=utf-8');
+        if (!Csrf::validate($_POST['_csrf'] ?? null)) {
+            http_response_code(403);
+            echo json_encode(['ok' => false, 'error' => 'CSRF'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        try {
+            $accountId = (int) ($_POST['account_id'] ?? 0);
+            $folderId = trim((string) ($_POST['folder_id'] ?? ''));
+            $saJson = trim((string) ($_POST['sa_key_json'] ?? ''));
+
+            if ($folderId !== '' && $saJson !== '') {
+                $bag = new \Wlsearch\Provider\AccountBag([
+                    'YANDEX_FOLDER_ID' => $folderId,
+                    'YANDEX_SA_KEY_JSON' => $saJson,
+                ], null, 'tmp-subnets');
+                $provider = new \Wlsearch\Provider\YandexCloudProvider($bag);
+            } elseif ($accountId > 0) {
+                $provider = \Wlsearch\Provider\ProviderFactory::make('yandex', $accountId);
+            } else {
+                throw new \InvalidArgumentException(
+                    'Нужны Folder id + SA key JSON, либо сохраните аккаунт и нажмите снова'
+                );
+            }
+
+            if (!($provider instanceof \Wlsearch\Provider\YandexCloudProvider)) {
+                throw new \RuntimeException('Ожидался YandexCloudProvider');
+            }
+            $subnets = $provider->listSubnets();
+            echo json_encode(['ok' => true, 'subnets' => $subnets], JSON_UNESCAPED_UNICODE);
+        } catch (\Throwable $e) {
+            http_response_code(400);
+            echo json_encode(['ok' => false, 'error' => $e->getMessage()], JSON_UNESCAPED_UNICODE);
+        }
+        exit;
+    }
+
     /**
      * @return array{0:string,1:string,2:array<string,string>,3:array<string,string>,4:bool}
      */

@@ -23,13 +23,11 @@ final class YandexCloudProvider implements ProviderInterface
     public function __construct(?AccountBag $cfg = null, ?HttpClient $http = null)
     {
         $this->cfg = $cfg ?? AccountBag::legacy('yandex');
-        foreach (['YANDEX_FOLDER_ID', 'YANDEX_SUBNET_ID'] as $k) {
-            if (($this->cfg->get($k) ?? '') === '') {
-                throw new \RuntimeException(
-                    "Missing {$k} for Yandex"
-                    . ($this->cfg->accountName !== '' ? ' (' . $this->cfg->accountName . ')' : '')
-                );
-            }
+        if (($this->cfg->get('YANDEX_FOLDER_ID') ?? '') === '') {
+            throw new \RuntimeException(
+                'Missing YANDEX_FOLDER_ID for Yandex'
+                . ($this->cfg->accountName !== '' ? ' (' . $this->cfg->accountName . ')' : '')
+            );
         }
         if (($this->cfg->get('YANDEX_SA_KEY_JSON') ?? '') === ''
             && (($this->cfg->get('YANDEX_SA_ID') ?? '') === ''
@@ -166,6 +164,40 @@ final class YandexCloudProvider implements ProviderInterface
                 $out[] = $this->mapInstance($inst);
             }
         }
+        return $out;
+    }
+
+    /**
+     * Подсети каталога для селекта в админке.
+     *
+     * @return list<array{id:string,name:string,zone_id:string,cidr:string}>
+     */
+    public function listSubnets(): array
+    {
+        $folderId = $this->cfg->require('YANDEX_FOLDER_ID');
+        $json = $this->api(
+            'GET',
+            'https://vpc.api.cloud.yandex.net/vpc/v1/subnets?folderId=' . rawurlencode($folderId)
+        );
+        $out = [];
+        foreach ($json['subnets'] ?? [] as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $id = (string) ($row['id'] ?? '');
+            if ($id === '') {
+                continue;
+            }
+            $cidrs = $row['v4CidrBlocks'] ?? [];
+            $cidr = is_array($cidrs) && isset($cidrs[0]) ? (string) $cidrs[0] : '';
+            $out[] = [
+                'id' => $id,
+                'name' => (string) ($row['name'] ?? $id),
+                'zone_id' => (string) ($row['zoneId'] ?? ''),
+                'cidr' => $cidr,
+            ];
+        }
+        usort($out, static fn (array $a, array $b): int => strcmp($a['zone_id'] . $a['name'], $b['zone_id'] . $b['name']));
         return $out;
     }
 

@@ -93,6 +93,7 @@ final class Kernel
         $router->get('/accounts', [$accounts, 'index']);
         $router->post('/accounts', [$accounts, 'create']);
         $router->post('/accounts/enabled', [$accounts, 'saveEnabled']);
+        $router->post('/accounts/yandex-subnets', [$accounts, 'yandexSubnets']);
         $router->post('/accounts/{id}', [$accounts, 'update']);
         $router->post('/accounts/{id}/delete', [$accounts, 'delete']);
 

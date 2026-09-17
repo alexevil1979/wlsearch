@@ -234,14 +234,44 @@ foreach ($byProvider as $list) {
                    value="<?= View::e((string) ($cfg['YANDEX_FOLDER_ID'] ?? '')) ?>" placeholder="b1g…">
             </div>
             <div>
+            <label for="YANDEX_ZONE_ID">Zone</label>
+            <?php
+            $ycZone = (string) ($cfg['YANDEX_ZONE_ID'] ?? 'ru-central1-a');
+            $ycZones = ['ru-central1-a', 'ru-central1-b', 'ru-central1-d', 'ru-central1-e'];
+            ?>
+            <select id="YANDEX_ZONE_ID" name="YANDEX_ZONE_ID">
+                <?php foreach ($ycZones as $z): ?>
+                    <option value="<?= View::e($z) ?>" <?= $ycZone === $z ? 'selected' : '' ?>><?= View::e($z) ?></option>
+                <?php endforeach; ?>
+                <?php if ($ycZone !== '' && !in_array($ycZone, $ycZones, true)): ?>
+                    <option value="<?= View::e($ycZone) ?>" selected><?= View::e($ycZone) ?> (текущая)</option>
+                <?php endif; ?>
+            </select>
+            </div>
+            <div class="span-2">
+            <label for="YANDEX_SUBNET_PICK">Подсеть (из каталога)</label>
+            <div style="display:flex;flex-wrap:wrap;gap:0.5rem;align-items:center">
+                <select id="YANDEX_SUBNET_PICK" style="flex:1;min-width:14rem">
+                    <option value="">— загрузите список или выберите —</option>
+                    <?php
+                    $curSubnet = (string) ($cfg['YANDEX_SUBNET_ID'] ?? '');
+                    if ($curSubnet !== ''):
+                    ?>
+                        <option value="<?= View::e($curSubnet) ?>" selected data-zone="<?= View::e($ycZone) ?>">
+                            текущая: <?= View::e($curSubnet) ?>
+                        </option>
+                    <?php endif; ?>
+                </select>
+                <button type="button" class="btn btn-secondary btn-sm" id="yc-load-subnets">Загрузить подсети</button>
+            </div>
+            <p class="muted" style="margin:0.35rem 0 0;font-size:0.8rem">
+                Подставьте Folder + SA JSON → «Загрузить». Выбор подсети заполнит Subnet id и Zone.
+            </p>
+            </div>
+            <div>
             <label for="YANDEX_SUBNET_ID">Subnet id</label>
             <input id="YANDEX_SUBNET_ID" name="YANDEX_SUBNET_ID" type="text"
                    value="<?= View::e((string) ($cfg['YANDEX_SUBNET_ID'] ?? '')) ?>" placeholder="e9b…">
-            </div>
-            <div>
-            <label for="YANDEX_ZONE_ID">Zone</label>
-            <input id="YANDEX_ZONE_ID" name="YANDEX_ZONE_ID" type="text"
-                   value="<?= View::e((string) ($cfg['YANDEX_ZONE_ID'] ?? 'ru-central1-a')) ?>">
             </div>
             <div>
             <label for="YANDEX_IMAGE_FAMILY">Image family</label>
@@ -294,3 +324,78 @@ foreach ($byProvider as $list) {
         </div>
     </form>
 </div>
+<script>
+(function () {
+    var btn = document.getElementById('yc-load-subnets');
+    var pick = document.getElementById('YANDEX_SUBNET_PICK');
+    var subnetInput = document.getElementById('YANDEX_SUBNET_ID');
+    var zoneSel = document.getElementById('YANDEX_ZONE_ID');
+    if (!btn || !pick) return;
+    var csrfEl = document.querySelector('#edit input[name="_csrf"]');
+    var csrf = csrfEl ? csrfEl.value : '';
+    var accountId = <?= (int) ($editId ?? 0) ?>;
+
+    function applyPick() {
+        var opt = pick.options[pick.selectedIndex];
+        if (!opt || !opt.value) return;
+        if (subnetInput) subnetInput.value = opt.value;
+        var z = opt.getAttribute('data-zone');
+        if (z && zoneSel) {
+            var found = false;
+            for (var i = 0; i < zoneSel.options.length; i++) {
+                if (zoneSel.options[i].value === z) { found = true; break; }
+            }
+            if (!found) {
+                var o = document.createElement('option');
+                o.value = z;
+                o.textContent = z;
+                zoneSel.appendChild(o);
+            }
+            zoneSel.value = z;
+        }
+    }
+    pick.addEventListener('change', applyPick);
+
+    btn.addEventListener('click', function () {
+        btn.disabled = true;
+        var prev = btn.textContent;
+        btn.textContent = '…';
+        var fd = new FormData();
+        fd.append('_csrf', csrf);
+        if (accountId > 0) fd.append('account_id', String(accountId));
+        fd.append('folder_id', (document.getElementById('YANDEX_FOLDER_ID') || {}).value || '');
+        fd.append('sa_key_json', (document.getElementById('YANDEX_SA_KEY_JSON') || {}).value || '');
+        fetch('/accounts/yandex-subnets', { method: 'POST', body: fd, credentials: 'same-origin' })
+            .then(function (r) { return r.json().then(function (j) { return { httpOk: r.ok, j: j }; }); })
+            .then(function (x) {
+                btn.disabled = false;
+                btn.textContent = prev;
+                if (!x.j || !x.j.ok) {
+                    alert((x.j && x.j.error) || 'Не удалось загрузить подсети');
+                    return;
+                }
+                var cur = subnetInput ? subnetInput.value : '';
+                pick.innerHTML = '';
+                var empty = document.createElement('option');
+                empty.value = '';
+                empty.textContent = '— выберите подсеть —';
+                pick.appendChild(empty);
+                (x.j.subnets || []).forEach(function (s) {
+                    var o = document.createElement('option');
+                    o.value = s.id;
+                    o.setAttribute('data-zone', s.zone_id || '');
+                    o.textContent = (s.zone_id || '?') + ' · ' + (s.name || s.id)
+                        + (s.cidr ? ' · ' + s.cidr : '') + ' · ' + s.id;
+                    if (s.id === cur) o.selected = true;
+                    pick.appendChild(o);
+                });
+                if (pick.value) applyPick();
+            })
+            .catch(function (e) {
+                btn.disabled = false;
+                btn.textContent = prev;
+                alert(String(e));
+            });
+    });
+})();
+</script>
