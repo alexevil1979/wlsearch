@@ -218,3 +218,89 @@ $regionsByProvider = [
         </div>
     </form>
 </div>
+<script>
+(function () {
+    var regions = <?= json_encode($regionsByProvider, JSON_UNESCAPED_UNICODE) ?>;
+    var defaults = {
+        yandex: <?= json_encode((string) ($defaultYandexRegion ?? 'ru-central1-a')) ?>,
+        timeweb: <?= json_encode((string) ($defaultRegion ?? 'spb-3')) ?>,
+        selectel: <?= json_encode((string) ($defaultSelectelRegion ?? 'ru-9a')) ?>
+    };
+    var accountZones = {};
+    <?php foreach ($yandexAccounts as $a):
+        $cfg = json_decode((string) ($a['config_json'] ?? ''), true);
+        $z = is_array($cfg) ? trim((string) ($cfg['YANDEX_ZONE_ID'] ?? '')) : '';
+        if ($z === '') {
+            continue;
+        }
+    ?>
+    accountZones[<?= (int) $a['id'] ?>] = <?= json_encode($z) ?>;
+    <?php endforeach; ?>
+
+    var provider = document.getElementById('provider');
+    var region = document.getElementById('region');
+    if (!provider || !region) return;
+
+    function fillRegion(prov, prefer) {
+        var list = regions[prov] || [];
+        var cur = prefer || defaults[prov] || (list[0] || '');
+        region.innerHTML = '';
+        list.forEach(function (z) {
+            var o = document.createElement('option');
+            o.value = z;
+            o.textContent = z;
+            if (z === cur) o.selected = true;
+            region.appendChild(o);
+        });
+        if (cur && list.indexOf(cur) < 0) {
+            var o = document.createElement('option');
+            o.value = cur;
+            o.textContent = cur;
+            o.selected = true;
+            region.appendChild(o);
+        }
+    }
+
+    function syncAccounts(prov) {
+        ['tw', 'sel', 'yc'].forEach(function (x) {
+            var el = document.getElementById('acc-' + x);
+            if (!el) return;
+            el.style.display = 'none';
+            el.querySelectorAll('input[type=checkbox]').forEach(function (c) { c.disabled = true; });
+        });
+        var map = { timeweb: 'tw', selectel: 'sel', yandex: 'yc' };
+        var box = document.getElementById('acc-' + map[prov]);
+        if (box) {
+            box.style.display = 'block';
+            box.querySelectorAll('input[type=checkbox]').forEach(function (c) {
+                c.disabled = c.dataset.off === '1';
+            });
+        }
+    }
+
+    function zoneFromCheckedYandex() {
+        var box = document.getElementById('acc-yc');
+        if (!box) return '';
+        var checked = box.querySelector('input[type=checkbox]:checked:not(:disabled)');
+        if (!checked) return '';
+        return accountZones[checked.value] || '';
+    }
+
+    provider.addEventListener('change', function () {
+        var v = provider.value;
+        syncAccounts(v);
+        var prefer = v === 'yandex' ? (zoneFromCheckedYandex() || defaults.yandex) : defaults[v];
+        fillRegion(v, prefer);
+    });
+
+    var ycBox = document.getElementById('acc-yc');
+    if (ycBox) {
+        ycBox.addEventListener('change', function (e) {
+            if (provider.value !== 'yandex') return;
+            if (!e.target || e.target.type !== 'checkbox') return;
+            var z = zoneFromCheckedYandex();
+            if (z) fillRegion('yandex', z);
+        });
+    }
+})();
+</script>
