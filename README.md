@@ -17,6 +17,8 @@
 - Inventory PASS, devices/tokens, blacklist ASN/prefix
 - Settings UI, audit log, Telegram notify
 
+**Yandex с нуля (регистрация → ID → `/accounts`):** [docs/YANDEX_SETUP.md](docs/YANDEX_SETUP.md)
+
 ## Не цель
 
 VLESS/Xray/WG/RushVPN/Hiddify — вне репо. После PASS IP используется оператором отдельно.

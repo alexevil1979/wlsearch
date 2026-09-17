@@ -5,6 +5,8 @@
 
 ## Yandex Cloud (основной для перебора IP)
 
+**Пошагово с нуля (консоль → админка):** [YANDEX_SETUP.md](YANDEX_SETUP.md)
+
 - Auth: authorized key сервисного аккаунта → JWT PS256 → IAM token
 - Credentials: `YANDEX_SA_KEY_JSON` (целиком JSON ключа) **или** `YANDEX_SA_ID` + `YANDEX_SA_KEY_ID` + `YANDEX_SA_PRIVATE_KEY`
 - Обязательно: `YANDEX_FOLDER_ID`, `YANDEX_SUBNET_ID`
