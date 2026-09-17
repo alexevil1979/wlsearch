@@ -190,11 +190,11 @@ IP при create **динамический**. Чтобы оставить с о
 При попадании IP → STOP очереди + Telegram → **BOOTSTRAPPING** (ждём probe) → **KEEP**.  
 IP сразу в protected; destroy VM при fail/OS-reinstall для избранного IP не делается.
 
-### Root-пароль VM
+### Root-пароль / serial console
 
-По умолчанию пароль root: **`qweasd333123`** (create + кнопка **root** в Runs).  
-Кнопка **root** → cloud-init + reboot (~1–2 мин) → `ssh root@IP` / serial console.  
-Пароль также виден рядом с IP (кнопка **pwd**).
+По умолчанию пароль: **`qweasd333123`**.  
+В **serial console** логин: **`wl`** (не `root` — Yandex/Ubuntu root часто locked).  
+После входа: `sudo -i`. Кнопка **root** в Runs → cloud-init + reboot (~1–2 мин).
 
 ---
 

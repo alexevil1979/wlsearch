@@ -34,6 +34,7 @@ $renderRunRows = static function (array $r, string $csrf, callable $badgeClass, 
     $canSetRoot = !empty($r['provider_server_id'])
         && !in_array($state, ['DESTROYED', 'DESTROYING', 'ORDERING'], true);
     $defaultRootPass = \Wlsearch\Probe\CloudInitBuilder::DEFAULT_ROOT_PASSWORD;
+    $loginUser = \Wlsearch\Probe\CloudInitBuilder::LOGIN_USER;
     $probeHint = '';
     if (in_array($state, ['BOOTSTRAPPING', 'CONTROL_CHECK', 'KEEP'], true) && !empty($r['ipv4'])) {
         $probeHint = \Wlsearch\Probe\CloudInitBuilder::oneLiner(
@@ -94,10 +95,10 @@ $renderRunRows = static function (array $r, string $csrf, callable $badgeClass, 
                                     data-ip="<?= View::e($ip) ?>">copy</button>
                             <?php if ($rootPass !== ''): ?>
                                 <div style="margin-top:0.25rem;font-size:0.72rem">
-                                    <span class="muted">root</span>
-                                    <code title="Пароль root (SSH / serial)"><?= View::e($rootPass) ?></code>
+                                    <span class="muted"><?= View::e($loginUser) ?></span>
+                                    <code title="Serial/SSH: <?= View::e($loginUser) ?> / пароль"><?= View::e($rootPass) ?></code>
                                     <button type="button" class="btn btn-secondary btn-sm js-copy-ip"
-                                            title="Копировать пароль root"
+                                            title="Копировать пароль"
                                             data-ip="<?= View::e($rootPass) ?>">pwd</button>
                                 </div>
                             <?php endif; ?>
@@ -143,10 +144,10 @@ $renderRunRows = static function (array $r, string $csrf, callable $badgeClass, 
                             <?php endif; ?>
                             <?php if ($canSetRoot): ?>
                                 <form method="post" action="/runs/<?= $id ?>/set-root-password"
-                                      onsubmit="return confirm('Установить пароль root = <?= View::e($defaultRootPass) ?>?\nVM reboot + probe переустановится.')">
+                                      onsubmit="return confirm('Установить пароль <?= View::e($loginUser) ?>/root = <?= View::e($defaultRootPass) ?>?\nSerial login: <?= View::e($loginUser) ?>\nVM reboot + probe.')">
                                     <?= $csrf ?>
                                     <button class="btn btn-secondary btn-sm" type="submit"
-                                            title="Пароль root <?= View::e($defaultRootPass) ?> + reboot">root</button>
+                                            title="Пароль <?= View::e($loginUser) ?>/root <?= View::e($defaultRootPass) ?> + reboot">root</button>
                                 </form>
                             <?php endif; ?>
                         </div>
@@ -155,7 +156,7 @@ $renderRunRows = static function (array $r, string $csrf, callable $badgeClass, 
                 <?php if ($rootPass === '' && $canSetRoot): ?>
                 <tr class="<?= View::e($trClass) ?>">
                     <td colspan="11" style="padding-top:0;font-size:0.75rem" class="muted">
-                        Пароль root ещё не записан — кнопка <strong>root</strong> → <?= View::e($defaultRootPass) ?>
+                        Пароль ещё не записан — кнопка <strong>root</strong> → логин <code><?= View::e($loginUser) ?></code> / <?= View::e($defaultRootPass) ?> (serial; не root)
                     </td>
                 </tr>
                 <?php endif; ?>
@@ -311,7 +312,3 @@ $renderRunRows = static function (array $r, string $csrf, callable $badgeClass, 
             setTimeout(arguments.callee, ms);
             return;
         }
-        window.location.reload();
-    }, ms);
-})();
-</script>

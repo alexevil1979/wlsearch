@@ -13,15 +13,28 @@ namespace Wlsearch\Probe;
  *
  * Create/reinstall: #cloud-config с bootcmd + per-boot — probe ставится
  * на каждом буте (после обычного reboot и после updateMetadata).
+ *
+ * Serial console (Yandex): логин wl / пароль DEFAULT — не root
+ * (cloud-init на Ubuntu не создаёт root-пользователя).
  */
 final class CloudInitBuilder
 {
-    /** Пароль root по умолчанию (create + кнопка «root» в Runs). */
+    /** Пароль по умолчанию (create + кнопка «root» в Runs). */
     public const DEFAULT_ROOT_PASSWORD = 'qweasd333123';
 
-    public static function oneLiner(string $provider, int $runId): string
+    /**
+     * Логин для serial/SSH. Не используем root в cloud-init users —
+     * Yandex/Ubuntu его игнорируют; root разблокируем скриптом.
+     */
+    public const LOGIN_USER = 'wl';
+
+    public static function oneLiner(string $provider, int $runId, ?string $rootPassword = null): string
     {
-        $inner = self::normalizeLf(self::installScriptBody($provider, $runId));
+        $inner = self::normalizeLf(self::installScriptBody(
+            $provider,
+            $runId,
+            $rootPassword ?? self::DEFAULT_ROOT_PASSWORD
+        ));
         return 'echo ' . base64_encode($inner) . ' | base64 -d | bash';
     }
 
@@ -36,10 +49,17 @@ final class CloudInitBuilder
     }
 
     /** Сырой bash для ручной вставки / сериал-консоли. */
-    public static function manualInstallBash(string $provider, int $runId): string
-    {
+    public static function manualInstallBash(
+        string $provider,
+        int $runId,
+        ?string $rootPassword = null
+    ): string {
         $runId = (int) $runId;
-        $body = self::normalizeLf(self::installScriptBody($provider, $runId));
+        $body = self::normalizeLf(self::installScriptBody(
+            $provider,
+            $runId,
+            $rootPassword ?? self::DEFAULT_ROOT_PASSWORD
+        ));
         return "#!/bin/sh\n# wlsearch probe run_{$runId}\n" . $body;
     }
 
@@ -57,7 +77,7 @@ final class CloudInitBuilder
     }
 
     /**
-     * Только пароль root (+ SSH) и probe — для кнопки «root» на уже живой VM.
+     * Пароль + probe — кнопка «root» на уже живой VM.
      */
     public static function forSetRootPassword(
         string $provider,
@@ -93,28 +113,28 @@ final class CloudInitBuilder
     ): string {
         $runId = (int) $runId;
         $tag = preg_replace('/[^a-z0-9_\-]/i', '', $tag) ?: 'run';
-        $script = self::manualInstallBash($provider, $runId);
+        $pass = self::sanitizeRootPassword((string) ($rootPassword ?? self::DEFAULT_ROOT_PASSWORD));
+        $user = self::LOGIN_USER;
+        $script = self::manualInstallBash($provider, $runId, $pass);
         $b64 = base64_encode($script);
 
-        $passBlock = '';
-        $rawPass = $rootPassword ?? self::DEFAULT_ROOT_PASSWORD;
-        $pass = self::sanitizeRootPassword((string) $rawPass);
-        // SSH + serial: root с паролем (Yandex не выдаёт отдельный root password)
+        // user wl — так Yandex рекомендует для serial (не root в users:)
         $passBlock = "ssh_pwauth: true\n"
             . "disable_root: false\n"
+            . "users:\n"
+            . "  - default\n"
+            . "  - name: {$user}\n"
+            . "    gecos: wlsearch\n"
+            . "    groups: [sudo, adm]\n"
+            . "    sudo: ALL=(ALL) NOPASSWD:ALL\n"
+            . "    shell: /bin/bash\n"
+            . "    lock_passwd: false\n"
             . "chpasswd:\n"
             . "  expire: false\n"
             . "  list: |\n"
+            . "    {$user}:{$pass}\n"
             . "    root:{$pass}\n";
-        // bootcmd: пароль на каждом буте (после updateMetadata chpasswd cloud-init может не сработать повторно)
-        $passBoot = "echo 'root:{$pass}' | chpasswd; "
-            . "sed -i 's/^#\\?PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config; "
-            . "sed -i 's/^#\\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config; "
-            . "systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true";
 
-        // bootcmd — каждый бут (не зависит от write_files order)
-        // write_files per-boot — запасной путь на следующих бутах
-        // runcmd — первая установка, если bootcmd ещё без сети
         return "#cloud-config\n"
             . "# wlsearch probe {$tag} run_{$runId}\n"
             . $passBlock
@@ -128,10 +148,8 @@ final class CloudInitBuilder
             . "    encoding: b64\n"
             . "    content: {$b64}\n"
             . "bootcmd:\n"
-            . "  - [ bash, -c, \"{$passBoot}\" ]\n"
             . "  - [ bash, -c, \"echo {$b64} | base64 -d | bash\" ]\n"
             . "runcmd:\n"
-            . "  - [ bash, -c, \"{$passBoot}\" ]\n"
             . "  - [ bash, /usr/local/bin/wlsearch-bootstrap.sh ]\n";
     }
 
@@ -140,10 +158,15 @@ final class CloudInitBuilder
         return str_replace(["\r\n", "\r"], "\n", $s);
     }
 
-    private static function installScriptBody(string $provider, int $runId): string
-    {
+    private static function installScriptBody(
+        string $provider,
+        int $runId,
+        ?string $rootPassword = null
+    ): string {
         $provider = preg_replace('/[^a-z0-9_\-]/i', '', $provider) ?: 'unknown';
         $runId = (int) $runId;
+        $pass = self::sanitizeRootPassword((string) ($rootPassword ?? self::DEFAULT_ROOT_PASSWORD));
+        $user = self::LOGIN_USER;
         $pyB64 = base64_encode(self::probePythonSource());
         $pyB64Wrapped = trim(chunk_split($pyB64, 76, "\n"));
 
@@ -152,7 +175,26 @@ set +e
 exec >>/var/log/wlsearch-cloud-init.log 2>&1
 echo "wlsearch-probe start \$(date -u -Iseconds)"
 export DEBIAN_FRONTEND=noninteractive
-mkdir -p /var/www/html /etc/wlsearch-ssl /usr/local/bin /var/log /etc/nginx/ssl /etc/default
+mkdir -p /var/www/html /etc/wlsearch-ssl /usr/local/bin /var/log /etc/nginx/ssl /etc/default /etc/ssh/sshd_config.d
+
+# 0) пароль + serial/SSH (Ubuntu/Yandex: root часто locked; user {$user} для консоли)
+id -u {$user} >/dev/null 2>&1 || useradd -m -s /bin/bash -G sudo {$user} 2>/dev/null
+echo '{$user}:{$pass}' | chpasswd
+echo 'root:{$pass}' | chpasswd
+passwd -u root 2>/dev/null || true
+usermod -U root 2>/dev/null || true
+usermod -s /bin/bash root 2>/dev/null || true
+passwd -u {$user} 2>/dev/null || true
+usermod -U {$user} 2>/dev/null || true
+echo '{$user} ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/wlsearch
+chmod 440 /etc/sudoers.d/wlsearch
+# cloud-init часто кладёт PasswordAuthentication no в sshd_config.d
+rm -f /etc/ssh/sshd_config.d/50-cloud-init.conf /etc/ssh/sshd_config.d/*-cloud-init.conf 2>/dev/null
+printf '%s\\n' 'PasswordAuthentication yes' 'PermitRootLogin yes' 'KbdInteractiveAuthentication yes' > /etc/ssh/sshd_config.d/99-wlsearch.conf
+sed -i 's/^#\\?PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config 2>/dev/null
+sed -i 's/^#\\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config 2>/dev/null
+systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
+echo "wlsearch-auth user={$user} root=unlocked \$(date -u -Iseconds)"
 
 # 1) открыть сеть сразу (иначе снаружи hang / refused)
 command -v ufw >/dev/null 2>&1 && ufw --force disable

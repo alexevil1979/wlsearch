@@ -96,8 +96,9 @@ final class YandexCloudProvider implements ProviderInterface
                 ],
             ],
             'metadata' => [
-                // cloud-init
+                // cloud-init + serial console (логин wl / пароль из cloud-init)
                 'user-data' => (string) $opts['cloud_init'],
+                'serial-port-enable' => '1',
             ],
             'schedulingPolicy' => [
                 'preemptible' => $preemptible,

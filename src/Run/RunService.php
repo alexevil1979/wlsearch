@@ -780,7 +780,8 @@ final class RunService
             . ' (reboot)'
         );
 
-        return "Пароль root установлен: {$pass}. VM перезагружается (~1–2 мин), потом ssh root@IP";
+        return "Пароль установлен (user wl + root): {$pass}. "
+            . 'VM reboot ~1–2 мин. В serial console логин: wl (не root), потом sudo -i';
     }
 
     /** @return array<string, mixed>|null */
