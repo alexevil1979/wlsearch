@@ -86,6 +86,7 @@ final class Kernel
         $router->post('/inventory/{id}/retire', [$inventory, 'retire']);
 
         $router->get('/checked-ips', [$checkedIps, 'index']);
+        $router->post('/checked-ips/clear-prefix', [$checkedIps, 'clearPrefix']);
         $router->post('/checked-ips/{ipv4}/delete', [$checkedIps, 'delete']);
 
         $router->get('/devices', [$devices, 'index']);

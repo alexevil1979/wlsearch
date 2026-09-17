@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Wlsearch\CheckedIp;
 
 use PDO;
+use Wlsearch\FavoriteSubnet\FavoriteSubnetService;
 use Wlsearch\Support\Database;
 
 /**
@@ -57,14 +58,23 @@ final class CheckedIpService
     }
 
     /**
-     * Если в той же /24 (первые 3 октета) уже был FAIL_BS — сразу не ок.
-     * Пример: 185.119.58.249 fail → 185.119.58.135 тоже fail.
+     * Если в той же /24 уже был FAIL_BS — сразу не ок.
+     * Исключение: IP из избранных подсетей — всегда полная проверка заново.
      */
     public function failedBsSame24Reason(string $ipv4): ?string
     {
         if (!filter_var($ipv4, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
             return null;
         }
+
+        try {
+            if ((new FavoriteSubnetService($this->pdo))->matchIp($ipv4) !== null) {
+                return null;
+            }
+        } catch (\Throwable) {
+            // таблица favorites может отсутствовать
+        }
+
         $parts = explode('.', $ipv4);
         if (count($parts) !== 4) {
             return null;
@@ -148,5 +158,43 @@ final class CheckedIpService
     {
         $stmt = $this->pdo->prepare('DELETE FROM checked_ips WHERE ipv4 = ?');
         $stmt->execute([$ipv4]);
+    }
+
+    /**
+     * Снять пометки fail_* / pass по префиксу (напр. 84.201.) — IP снова пойдут в полную проверку.
+     * @return int сколько строк удалено
+     */
+    public function deleteByPrefix(string $prefix): int
+    {
+        $prefix = trim($prefix);
+        if ($prefix === '' || !preg_match('/^\d{1,3}(\.\d{1,3}){0,3}\.?$/', $prefix)) {
+            throw new \InvalidArgumentException('Некорректный префикс IP (пример: 84.201.)');
+        }
+        if (!str_ends_with($prefix, '.')) {
+            $prefix .= '.';
+        }
+        $stmt = $this->pdo->prepare('DELETE FROM checked_ips WHERE ipv4 LIKE ?');
+        $stmt->execute([$prefix . '%']);
+        return $stmt->rowCount();
+    }
+
+    /**
+     * Удалить все fail_bs (и опционально другие fail_*) по префиксу.
+     * @return int
+     */
+    public function clearFailByPrefix(string $prefix): int
+    {
+        $prefix = trim($prefix);
+        if ($prefix === '' || !preg_match('/^\d{1,3}(\.\d{1,3}){0,3}\.?$/', $prefix)) {
+            throw new \InvalidArgumentException('Некорректный префикс IP (пример: 84.201.)');
+        }
+        if (!str_ends_with($prefix, '.')) {
+            $prefix .= '.';
+        }
+        $stmt = $this->pdo->prepare(
+            "DELETE FROM checked_ips WHERE ipv4 LIKE ? AND verdict IN ('fail_bs','fail_control','fail_seen','error')"
+        );
+        $stmt->execute([$prefix . '%']);
+        return $stmt->rowCount();
     }
 }

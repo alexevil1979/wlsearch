@@ -39,6 +39,28 @@ final class CheckedIpsController
         exit;
     }
 
+    public function clearPrefix(): void
+    {
+        $this->requireAuth();
+        if (!Csrf::validate($_POST['_csrf'] ?? null)) {
+            Flash::set('error', 'Неверный CSRF-токен.');
+            header('Location: /checked-ips');
+            exit;
+        }
+        $prefix = trim((string) ($_POST['prefix'] ?? ''));
+        try {
+            $n = (new CheckedIpService())->clearFailByPrefix($prefix);
+            Flash::set(
+                'ok',
+                "Сняты fail-пометки для {$prefix}* — удалено {$n}. Эти IP снова проверяются полностью (избранные /24 не травятся)."
+            );
+        } catch (\Throwable $e) {
+            Flash::set('error', $e->getMessage());
+        }
+        header('Location: /checked-ips');
+        exit;
+    }
+
     private function requireAuth(): void
     {
         if (!AuthService::check()) {

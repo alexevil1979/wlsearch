@@ -6,8 +6,24 @@ use Wlsearch\Support\View;
 <div class="page-head">
     <div>
         <h1>Checked IPs</h1>
-        <p class="muted">Уже проверенные адреса. Повторная выдача → сразу destroy.</p>
+        <p class="muted">Уже проверенные адреса. Повторная выдача → сразу destroy (кроме избранных: /24 не травит).</p>
     </div>
+</div>
+
+<div class="card" style="padding:0.85rem 1rem;margin-bottom:1rem">
+    <form method="post" action="/checked-ips/clear-prefix" style="display:flex;flex-wrap:wrap;gap:0.5rem;align-items:end"
+          onsubmit="return confirm('Снять все fail-* для префикса? IP снова пойдут в полную BS-проверку.')">
+        <?= $csrf ?>
+        <div>
+            <label for="prefix" class="muted" style="font-size:0.8rem">Снять fail по префиксу</label>
+            <input id="prefix" name="prefix" type="text" value="84.201." placeholder="84.201."
+                   style="min-width:10rem" required>
+        </div>
+        <button class="btn btn-danger" type="submit">forget fails</button>
+    </form>
+    <p class="muted" style="margin:0.5rem 0 0;font-size:0.8rem">
+        Пример: <code>84.201.</code> — все fail_bs/fail_* в этой подсети. PASS-записи не трогает.
+    </p>
 </div>
 
 <div class="card table-wrap">

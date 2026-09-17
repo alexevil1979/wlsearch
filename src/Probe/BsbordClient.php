@@ -85,7 +85,9 @@ final class BsbordClient
     }
 
     /**
-     * Probe HTTP :80 and HTTPS :443 via BS (dpi=on). Both must PASS.
+     * Probe HTTP :80 via BS (dpi=on) — основной PASS.
+     * HTTPS :443 — информативно (самоподписанный часто валит HTTP-клиент bsbord),
+     * на общий ok не влияет, если :80 уже PASS.
      *
      * @return array{
      *   ok: bool,
@@ -112,12 +114,14 @@ final class BsbordClient
         $httpRes = $this->probeTarget('http://' . $ipv4 . '/', 80, $operators, $ipv4, $marker);
         $httpsRes = $this->probeTarget('https://' . $ipv4 . '/', 443, $operators, $ipv4, $marker);
 
-        $ok = $httpRes['ok'] && $httpsRes['ok'];
+        // PASS = HTTP :80. HTTPS не блокирует (в UI часто зелёный только TCP).
+        $ok = $httpRes['ok'];
         $ops = array_values(array_unique(array_merge($httpRes['operators'], $httpsRes['operators'])));
         $detail = sprintf(
-            'http[%s] https[%s]',
+            'http[%s] https[%s%s]',
             $httpRes['detail'],
-            $httpsRes['detail']
+            $httpsRes['detail'],
+            $httpsRes['ok'] ? '' : ' (игнор для PASS)'
         );
 
         return [
@@ -295,17 +299,37 @@ final class BsbordClient
 
             $tcpOk = $this->isTcpOk($leg);
             $http = is_array($leg['http'] ?? null) ? $leg['http'] : null;
-            $status = (int) ($http['status'] ?? 0);
+            $status = (int) ($http['status'] ?? $http['code'] ?? $http['status_code'] ?? 0);
+            $httpTruthy = $http !== null && (
+                $this->truthy($http['ok'] ?? null)
+                || in_array(strtolower((string) ($http['verdict'] ?? '')), ['ok', 'pass', 'success', 'alive'], true)
+            );
             $httpOk = $http !== null
-                && $this->truthy($http['ok'] ?? null)
-                && $status >= 200
-                && $status < 400;
-            $bodyHead = (string) ($http['body_head'] ?? $http['body'] ?? '');
+                && ($httpTruthy || ($status >= 200 && $status < 400))
+                && ($status === 0 || ($status >= 200 && $status < 400));
+            // body может быть в разных полях / обрезан DPI — ищем маркер шире
+            $bodyHead = (string) (
+                $http['body_head']
+                ?? $http['body']
+                ?? $http['response_body']
+                ?? $http['preview']
+                ?? $leg['body_head']
+                ?? ''
+            );
             $hasMarker = $bodyHead !== '' && str_contains($bodyHead, $marker);
+            // Если TCP+HTTP 2xx ок, а body_head пустой (bsbord UI часто зелёный по TCP) —
+            // не режем PASS только из‑за пустого preview, если http.ok явно true.
+            if (!$hasMarker && $tcpOk && $httpOk && $status >= 200 && $status < 400
+                && $bodyHead === '' && $this->truthy($http['ok'] ?? null)
+            ) {
+                $hasMarker = true; // считаем маркер «не проверяли тело»
+            }
 
-            // Как на сайте: без зелёного TCP — не PASS. Плюс реальный HTTP с маркером.
+            // PASS: TCP (как зелёная точка UI) + HTTP успех + маркер (или пустое тело при http.ok)
             $legOk = $tcpOk && $httpOk && $hasMarker;
-            if ($hasMarker) {
+            if ($hasMarker && $bodyHead !== '' && str_contains($bodyHead, $marker)) {
+                $markerOk = true;
+            } elseif ($legOk) {
                 $markerOk = true;
             }
 
