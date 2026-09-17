@@ -42,6 +42,24 @@ final class Settings
         return in_array(strtolower($v), ['1', 'true', 'yes', 'on'], true);
     }
 
+    public static function put(string $key, string $value): void
+    {
+        $pdo = Database::tryPdo();
+        if ($pdo === null) {
+            return;
+        }
+        try {
+            $stmt = $pdo->prepare(
+                'INSERT INTO settings (setting_key, setting_value, updated_at) VALUES (?, ?, NOW())
+                 ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = NOW()'
+            );
+            $stmt->execute([$key, $value]);
+        } catch (\Throwable) {
+            return;
+        }
+        self::resetCache();
+    }
+
     /** @return array<string, string> */
     public static function all(): array
     {

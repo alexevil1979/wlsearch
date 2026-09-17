@@ -28,6 +28,7 @@ final class SettingsController
         'PROVISION_TIMEOUT_SEC',
         'BOOTSTRAP_TIMEOUT_SEC',
         'CONTROL_CHECK_TIMEOUT_SEC',
+        'YANDEX_QUOTA_COOLDOWN_SEC',
         'BSBORD_API_TOKEN',
         'BSBORD_OPERATORS',
         'BSBORD_MIN_PASS',

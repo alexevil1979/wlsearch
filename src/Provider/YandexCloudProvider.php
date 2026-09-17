@@ -358,6 +358,17 @@ final class YandexCloudProvider implements ProviderInterface
         return $id;
     }
 
+    private static function isQuotaRateBody(string $body): bool
+    {
+        if ($body === '') {
+            return false;
+        }
+        return str_contains($body, 'QuotaFailure')
+            || str_contains($body, 'externalAddressesCreation.rate')
+            || str_contains($body, 'Quota vpc.')
+            || (str_contains($body, '"code": 8') && str_contains($body, 'exceeded'));
+    }
+
     /**
      * @param array<string, mixed>|null $body
      * @return array<string, mixed>
@@ -372,6 +383,11 @@ final class YandexCloudProvider implements ProviderInterface
         ]);
         if ($resp['status'] === 404) {
             throw new \RuntimeException('Yandex HTTP 404: ' . mb_substr($resp['body'], 0, 400));
+        }
+        if ($resp['status'] === 429 || self::isQuotaRateBody($resp['body'])) {
+            throw new ProviderQuotaException(
+                'Yandex HTTP ' . $resp['status'] . ': ' . mb_substr($resp['body'], 0, 800)
+            );
         }
         if ($resp['status'] < 200 || $resp['status'] >= 300) {
             throw new \RuntimeException(
@@ -399,6 +415,9 @@ final class YandexCloudProvider implements ProviderInterface
                     $msg = is_array($op['error'])
                         ? (($op['error']['message'] ?? '') . ' ' . json_encode($op['error'], JSON_UNESCAPED_UNICODE))
                         : (string) $op['error'];
+                    if (self::isQuotaRateBody($msg)) {
+                        throw new ProviderQuotaException('Yandex operation quota: ' . mb_substr($msg, 0, 800));
+                    }
                     throw new \RuntimeException('Yandex operation failed: ' . $msg);
                 }
                 return $op;

@@ -29,6 +29,7 @@ $bsSelected = $bsSelected ?? [];
             'PROVISION_TIMEOUT_SEC' => 'Timeout provision (сек)',
             'BOOTSTRAP_TIMEOUT_SEC' => 'Timeout bootstrap (сек)',
             'CONTROL_CHECK_TIMEOUT_SEC' => 'Timeout control (сек)',
+            'YANDEX_QUOTA_COOLDOWN_SEC' => 'Пауза create при квоте Yandex IP rate (сек, по умолч. 3600)',
             'BS_MODE_DEFAULT' => 'Дефолт BS при запуске (bsbord|agent|both)',
             'BSBORD_MIN_PASS' => 'Мин. число операторов БС с PASS',
         ];

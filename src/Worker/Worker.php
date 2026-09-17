@@ -76,6 +76,24 @@ final class Worker
             fwrite(STDOUT, "expired BS tasks: {$expired}\n");
         }
 
+        // ERROR из-за квоты Yandex IP → снова ORDERING (ждёт YANDEX_IP_CREATE_WAIT_UNTIL)
+        try {
+            $rev = $this->pdo->exec(
+                "UPDATE runs SET state = 'ORDERING',
+                        error_message = 'повтор после квоты Yandex IP (rate)',
+                        updated_at = NOW()
+                 WHERE state = 'ERROR'
+                   AND provider = 'yandex'
+                   AND (provider_server_id IS NULL OR provider_server_id = '')
+                   AND (error_message LIKE '%externalAddressesCreation.rate%'
+                        OR error_message LIKE '%HTTP 429%')"
+            );
+            if (is_int($rev) && $rev > 0) {
+                fwrite(STDOUT, "revived {$rev} yandex quota ERROR → ORDERING\n");
+            }
+        } catch (\Throwable) {
+        }
+
         // Phone-agent tasks only for agent/both modes
         $bsRuns = $this->pdo->query(
             "SELECT id, ipv4, bs_mode FROM runs
@@ -148,6 +166,30 @@ final class Worker
     private function handleOrdering(array $run): void
     {
         $id = (int) $run['id'];
+        $providerName = (string) ($run['provider'] ?? '');
+
+        // Глобальная пауза после Yandex 429 (vpc.externalAddressesCreation.rate)
+        if ($providerName === 'yandex') {
+            $waitUntil = Settings::int('YANDEX_IP_CREATE_WAIT_UNTIL', 0);
+            if ($waitUntil > time()) {
+                $left = $waitUntil - time();
+                $this->pdo->prepare(
+                    'UPDATE runs SET error_message = ?, updated_at = NOW() WHERE id = ? AND state = \'ORDERING\''
+                )->execute([
+                    mb_substr(
+                        'ожидание квоты Yandex IP ~' . (int) ceil($left / 60) . ' мин (до '
+                        . date('H:i:s', $waitUntil) . ')',
+                        0,
+                        500
+                    ),
+                    $id,
+                ]);
+                return;
+            }
+            if ($waitUntil > 0 && $waitUntil <= time()) {
+                Settings::put('YANDEX_IP_CREATE_WAIT_UNTIL', '0');
+            }
+        }
 
         $maxParallel = max(1, Settings::int('MAX_PARALLEL_VMS', 1));
         $live = (int) $this->pdo->query(
@@ -184,6 +226,10 @@ final class Worker
                 $switched = $this->reassignOrderingAccount($run, [$accountId]);
                 if (!$switched) {
                     fwrite(STDOUT, "run #{$id}: acc #{$accountId} занят PASS/KEEP — жду другой аккаунт\n");
+                    // вернуть в ORDERING — иначе зависнет в PROVISIONING без server
+                    $this->pdo->prepare(
+                        "UPDATE runs SET state = 'ORDERING', error_message = ?, updated_at = NOW() WHERE id = ?"
+                    )->execute(['ожидание свободного аккаунта (PASS/KEEP на текущем)', $id]);
                     return;
                 }
                 $run = $this->runs->get($id) ?? $run;
@@ -228,6 +274,9 @@ final class Worker
                 }
                 $lastBalanceErr = null;
                 break;
+            } catch (\Wlsearch\Provider\ProviderQuotaException $e) {
+                $this->deferForYandexIpQuota($id, $e->getMessage());
+                return;
             } catch (\Wlsearch\Provider\BalanceShortException $e) {
                 // больше не блокируем create по оценке запаса; на всякий случай пробуем другой аккаунт
                 $lastBalanceErr = $e;
@@ -246,6 +295,11 @@ final class Worker
             } catch (\Throwable $e) {
                 if ($accountId > 0) {
                     $accounts->markUsed($accountId, $e->getMessage());
+                }
+                // На всякий случай: 429 в тексте без спец. exception
+                if ($this->looksLikeYandexIpQuota($e->getMessage())) {
+                    $this->deferForYandexIpQuota($id, $e->getMessage());
+                    return;
                 }
                 throw $e;
             }
@@ -270,6 +324,54 @@ final class Worker
         if ($info->isUnpaidOrBlocked()) {
             fwrite(STDOUT, "run #{$id}: WARNING create returned {$info->status} — see storage/logs/timeweb.log\n");
         }
+    }
+
+    private function looksLikeYandexIpQuota(string $message): bool
+    {
+        return str_contains($message, 'externalAddressesCreation.rate')
+            || str_contains($message, 'Quota vpc.')
+            || (str_contains($message, 'HTTP 429') && str_contains($message, 'Quota'));
+    }
+
+    private function deferForYandexIpQuota(int $runId, string $message): void
+    {
+        $cooldown = max(300, Settings::int('YANDEX_QUOTA_COOLDOWN_SEC', 3600));
+        $waitUntil = time() + $cooldown;
+        Settings::put('YANDEX_IP_CREATE_WAIT_UNTIL', (string) $waitUntil);
+
+        $msg = 'ожидание квоты Yandex IP до ' . date('H:i:s', $waitUntil)
+            . ' (~' . (int) ceil($cooldown / 60) . ' мин): vpc.externalAddressesCreation.rate';
+        $this->pdo->prepare(
+            "UPDATE runs SET state = 'ORDERING', error_message = ?, updated_at = NOW()
+             WHERE id = ?"
+        )->execute([mb_substr($msg, 0, 500), $runId]);
+
+        // Вернуть в очередь и другие ERROR по этой квоте
+        $this->pdo->prepare(
+            "UPDATE runs SET state = 'ORDERING', error_message = ?, updated_at = NOW()
+             WHERE state = 'ERROR'
+               AND provider = 'yandex'
+               AND provider_server_id IS NULL
+               AND (error_message LIKE '%externalAddressesCreation.rate%'
+                    OR error_message LIKE '%HTTP 429%Quota%')"
+        )->execute([mb_substr($msg, 0, 500)]);
+
+        $lastTg = Settings::int('YANDEX_QUOTA_TG_AT', 0);
+        if ($lastTg < time() - 600) {
+            Settings::put('YANDEX_QUOTA_TG_AT', (string) time());
+            $this->tg->send(
+                "wlsearch: квота Yandex IP (rate 64) — пауза create ~"
+                . (int) ceil($cooldown / 60) . " мин до " . date('H:i:s', $waitUntil)
+                . "\nrun #{$runId}"
+            );
+        }
+        FileLog::write('yandex', 'quota:defer', [
+            'run_id' => $runId,
+            'wait_until' => date('c', $waitUntil),
+            'cooldown_s' => $cooldown,
+            'error' => mb_substr($message, 0, 400),
+        ]);
+        fwrite(STDOUT, "run #{$runId}: Yandex IP quota — defer {$cooldown}s\n");
     }
 
     /**
