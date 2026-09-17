@@ -22,9 +22,9 @@ final class CloudInitBuilder
         return 'echo ' . base64_encode($inner) . ' | base64 -d | bash';
     }
 
-    public static function forRun(string $provider, int $runId): string
+    public static function forRun(string $provider, int $runId, ?string $rootPassword = null): string
     {
-        return self::cloudConfig($provider, $runId, 'create');
+        return self::cloudConfig($provider, $runId, 'create', $rootPassword);
     }
 
     /** Сырой bash для ручной вставки / сериал-консоли. */
@@ -38,23 +38,53 @@ final class CloudInitBuilder
     /**
      * Повторная установка после reboot: тот же cloud-config (bootcmd + per-boot).
      */
-    public static function forRerun(string $provider, int $runId): string
+    public static function forRerun(string $provider, int $runId, ?string $rootPassword = null): string
     {
-        return self::cloudConfig($provider, $runId, 'reinstall');
+        return self::cloudConfig($provider, $runId, 'reinstall', $rootPassword);
     }
 
-    private static function cloudConfig(string $provider, int $runId, string $tag): string
+    /** Пароль только [A-Za-z0-9] — безопасно для YAML chpasswd. */
+    public static function generateRootPassword(int $bytes = 9): string
     {
+        $alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+        $max = strlen($alphabet) - 1;
+        $out = '';
+        $raw = random_bytes(max(8, $bytes));
+        for ($i = 0; $i < strlen($raw); $i++) {
+            $out .= $alphabet[ord($raw[$i]) % ($max + 1)];
+        }
+        return $out;
+    }
+
+    private static function cloudConfig(
+        string $provider,
+        int $runId,
+        string $tag,
+        ?string $rootPassword = null
+    ): string {
         $runId = (int) $runId;
         $tag = preg_replace('/[^a-z0-9_\-]/i', '', $tag) ?: 'run';
         $script = self::manualInstallBash($provider, $runId);
         $b64 = base64_encode($script);
+
+        $passBlock = '';
+        $pass = $rootPassword !== null ? preg_replace('/[^A-Za-z0-9]/', '', $rootPassword) : '';
+        if ($pass !== null && $pass !== '') {
+            // SSH + serial: root с паролем (Yandex не выдаёт отдельный root password)
+            $passBlock = "ssh_pwauth: true\n"
+                . "disable_root: false\n"
+                . "chpasswd:\n"
+                . "  expire: false\n"
+                . "  list: |\n"
+                . "    root:{$pass}\n";
+        }
 
         // bootcmd — каждый бут (не зависит от write_files order)
         // write_files per-boot — запасной путь на следующих бутах
         // runcmd — первая установка, если bootcmd ещё без сети
         return "#cloud-config\n"
             . "# wlsearch probe {$tag} run_{$runId}\n"
+            . $passBlock
             . "write_files:\n"
             . "  - path: /var/lib/cloud/scripts/per-boot/99-wlsearch.sh\n"
             . "    permissions: '0755'\n"
@@ -67,6 +97,7 @@ final class CloudInitBuilder
             . "bootcmd:\n"
             . "  - [ bash, -c, \"echo {$b64} | base64 -d | bash\" ]\n"
             . "runcmd:\n"
+            . "  - [ bash, -c, \"sed -i 's/^#\\\\?PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config; sed -i 's/^#\\\\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config; systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true\" ]\n"
             . "  - [ bash, /usr/local/bin/wlsearch-bootstrap.sh ]\n";
     }
 

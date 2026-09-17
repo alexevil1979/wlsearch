@@ -259,7 +259,8 @@ final class Worker
         }
 
         $name = sprintf('wlsearch-%d-%s', $id, date('His'));
-        $cloudInit = CloudInitBuilder::forRun((string) $run['provider'], $id);
+        $rootPassword = CloudInitBuilder::generateRootPassword();
+        $cloudInit = CloudInitBuilder::forRun((string) $run['provider'], $id, $rootPassword);
 
         $tried = [];
         $lastBalanceErr = null;
@@ -353,10 +354,12 @@ final class Worker
             throw $lastBalanceErr ?? new \RuntimeException('create: no provider response');
         }
 
-        $meta = null;
+        $metaArr = [];
         if (!empty($info->raw['_wlsearch_meta']) && is_array($info->raw['_wlsearch_meta'])) {
-            $meta = json_encode($info->raw['_wlsearch_meta'], JSON_UNESCAPED_UNICODE);
+            $metaArr = $info->raw['_wlsearch_meta'];
         }
+        $metaArr['root_password'] = $rootPassword;
+        $meta = json_encode($metaArr, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 
         $stmt = $this->pdo->prepare(
             'UPDATE runs SET provider_server_id = ?, ipv4 = ?, provider_meta = ?, state = ?,
@@ -546,13 +549,21 @@ final class Worker
 
             $fav = $this->favorites->matchIp($info->ipv4);
             if ($fav !== null) {
-                fwrite(STDOUT, "run #{$id}: FAVORITE subnet {$fav['cidr']} ip={$info->ipv4} → STOP\n");
-                $this->runs->hitFavoriteSubnet(
+                fwrite(STDOUT, "run #{$id}: FAVORITE subnet {$fav['cidr']} ip={$info->ipv4} → BOOTSTRAP then KEEP\n");
+                $metaFav = [];
+                if (!empty($run['provider_meta'])) {
+                    $decoded = json_decode((string) $run['provider_meta'], true);
+                    if (is_array($decoded)) {
+                        $metaFav = $decoded;
+                    }
+                }
+                $this->runs->beginFavoriteSubnet(
                     $id,
                     $info->ipv4,
                     $fav,
                     $asn,
-                    $asnOrg !== null ? mb_substr($asnOrg, 0, 128) : null
+                    $asnOrg !== null ? mb_substr($asnOrg, 0, 128) : null,
+                    $metaFav
                 );
                 return;
             }
@@ -729,7 +740,11 @@ final class Worker
                 $provName = (string) ($run['provider'] ?? 'unknown');
                 $did = false;
                 if (method_exists($provider, 'repushCloudInitAndReboot')) {
-                    $script = CloudInitBuilder::forRerun($provName, $id);
+                    $script = CloudInitBuilder::forRerun(
+                        $provName,
+                        $id,
+                        isset($meta['root_password']) ? (string) $meta['root_password'] : null
+                    );
                     $provider->repushCloudInitAndReboot($serverId, $script);
                     $meta['probe_repush'] = 1;
                     $meta['probe_reinstall'] = 1;
@@ -801,7 +816,11 @@ final class Worker
                     $provider = ProviderFactory::forRun($run);
                     if (method_exists($provider, 'repushCloudInitAndReboot')) {
                         $provName = (string) ($run['provider'] ?? 'unknown');
-                        $script = CloudInitBuilder::forRerun($provName, $id);
+                        $script = CloudInitBuilder::forRerun(
+                            $provName,
+                            $id,
+                            isset($meta['root_password']) ? (string) $meta['root_password'] : null
+                        );
                         $provider->repushCloudInitAndReboot($serverId, $script);
                         $meta['probe_reinstall'] = 1;
                         $meta['probe_reinstall_at'] = time();
@@ -875,6 +894,16 @@ final class Worker
                     'age_since_reinstall_s' => $ageSinceReinstall,
                     'last_ping' => $meta['last_ping'] ?? null,
                 ]);
+                if (!empty($meta['favorite_keep'])) {
+                    // Избранный IP нельзя менять destroy+recreate
+                    $this->runs->finishFavoriteKeep(
+                        $id,
+                        $ipv4,
+                        $meta,
+                        'probe timeout — KEEP без OS reinstall (проверьте вручную)'
+                    );
+                    return;
+                }
                 $this->reprovisionOsAfterBootstrapFail($run, $meta, $reason);
                 return;
             }
@@ -885,6 +914,10 @@ final class Worker
                 'age_since_reinstall_s' => $ageSinceReinstall,
                 'last_ping' => $meta['last_ping'] ?? null,
             ]);
+            if (!empty($meta['favorite_keep'])) {
+                $this->runs->finishFavoriteKeep($id, $ipv4, $meta, 'probe timeout после OS reinstall');
+                return;
+            }
             $this->failControl($run, $reason . ' (после переустановки ОС)');
             return;
         }
@@ -892,6 +925,15 @@ final class Worker
         // Общий лимит без reboot (если reboot недоступен)
         if (empty($meta['probe_reboot']) && $age > $timeout) {
             $run['ipv4'] = $ipv4;
+            if (!empty($meta['favorite_keep'])) {
+                $this->runs->finishFavoriteKeep(
+                    $id,
+                    $ipv4,
+                    $meta,
+                    'bootstrap timeout — KEEP (проверьте probe вручную)'
+                );
+                return;
+            }
             $this->failControl($run, 'bootstrap timeout: probe не отвечает ' . $age . 's');
             return;
         }
@@ -922,6 +964,12 @@ final class Worker
                 $this->pdo->prepare(
                     'UPDATE runs SET error_message = NULL WHERE id = ? AND state = \'BOOTSTRAPPING\''
                 )->execute([$id]);
+                if (!empty($meta['favorite_keep'])) {
+                    $this->runs->finishFavoriteKeep($id, $ipv4, $meta, 'probe OK');
+                    FileLog::write('probe', 'bootstrap:ok_favorite', ['run_id' => $id, 'ipv4' => $ipv4, 'attempt' => $i]);
+                    fwrite(STDOUT, "run #{$id}: probe OK → KEEP (favorite)\n");
+                    return;
+                }
                 $this->setState($id, 'CONTROL_CHECK');
                 FileLog::write('probe', 'bootstrap:ok', ['run_id' => $id, 'ipv4' => $ipv4, 'attempt' => $i, 'age_s' => $ageNow]);
                 fwrite(STDOUT, "run #{$id}: probe responding → CONTROL_CHECK\n");
@@ -941,6 +989,12 @@ final class Worker
                     $this->pdo->prepare(
                         'UPDATE runs SET error_message = NULL WHERE id = ? AND state = \'BOOTSTRAPPING\''
                     )->execute([$id]);
+                    if (!empty($meta['favorite_keep'])) {
+                        $this->runs->finishFavoriteKeep($id, $ipv4, $meta, 'http probe OK');
+                        FileLog::write('probe', 'bootstrap:http_ok_favorite', ['run_id' => $id, 'ipv4' => $ipv4]);
+                        fwrite(STDOUT, "run #{$id}: http probe OK → KEEP (favorite)\n");
+                        return;
+                    }
                     $this->setState($id, 'CONTROL_CHECK');
                     FileLog::write('probe', 'bootstrap:http_ok', ['run_id' => $id, 'ipv4' => $ipv4, 'attempt' => $i]);
                     fwrite(STDOUT, "run #{$id}: http probe OK (bsbord) → CONTROL_CHECK\n");
@@ -1047,7 +1101,11 @@ final class Worker
                 if (method_exists($provider, 'repushCloudInitAndReboot')) {
                     $provider->repushCloudInitAndReboot(
                         $serverId,
-                        CloudInitBuilder::forRerun($provName, $id)
+                        CloudInitBuilder::forRerun(
+                            $provName,
+                            $id,
+                            isset($meta['root_password']) ? (string) $meta['root_password'] : null
+                        )
                     );
                     $meta['probe_reinstall'] = 1;
                     $meta['probe_reinstall_at'] = time();
@@ -1088,6 +1146,15 @@ final class Worker
         if ($ageSinceReinstall !== null && $ageSinceReinstall > $waitAfterReinstallSec) {
             $run['ipv4'] = $ipv4;
             $reason = "bootstrap timeout после reinstall: {$err}";
+            if (!empty($meta['favorite_keep'])) {
+                $this->runs->finishFavoriteKeep(
+                    $id,
+                    $ipv4,
+                    $meta,
+                    'probe timeout после reinstall — KEEP (IP сохранён)'
+                );
+                return;
+            }
             if (empty($meta['probe_os_reinstall'])) {
                 $this->reprovisionOsAfterBootstrapFail($run, $meta, $reason);
                 return;

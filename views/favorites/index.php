@@ -6,7 +6,8 @@ use Wlsearch\Support\View;
 <h1>Избранные подсети</h1>
 <p class="muted">
     Если публичный IP VPS попадает в CIDR из списка — очередь останавливается полностью
-    (ORDERING→SKIPPED, живые→KEEP без destroy), в Telegram уходит сообщение
+    (ORDERING→SKIPPED, живые→KEEP без destroy), ставит probe на попавший IP,
+    затем KEEP. В Telegram уходит сообщение. Root-пароль — в Runs у IP (кнопка pwd).
     «избранная подсеть попалась».
 </p>
 

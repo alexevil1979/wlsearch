@@ -187,7 +187,15 @@ IP при create **динамический**. Чтобы оставить с о
 ## 7. Избранные подсети в wlsearch
 
 Админка → **Избранные** (`/favorites`): CIDR вроде `84.201.128.0/16`.  
-При попадании IP → STOP очереди + Telegram «избранная подсеть попалась» + KEEP.
+При попадании IP → STOP очереди + Telegram → **BOOTSTRAPPING** (ждём probe) → **KEEP**.  
+IP сразу в protected; destroy VM при fail/OS-reinstall для избранного IP не делается.
+
+### Root-пароль VM
+
+При create wlsearch генерирует пароль root и кладёт в cloud-init (`chpasswd` + `ssh_pwauth`).  
+Смотри в Runs рядом с IP кнопку **pwd** (хранится в `provider_meta.root_password`).  
+SSH: `ssh root@IP` с этим паролем. Serial console в Yandex — тот же пароль.  
+У старых VM (до этого патча) пароля в системе нет — только serial / свой ключ.
 
 ---
 

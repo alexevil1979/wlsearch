@@ -32,11 +32,18 @@ $renderRunRows = static function (array $r, string $csrf, callable $badgeClass, 
     $canRetryBs = !empty($r['ipv4'])
         && !in_array($state, ['DESTROYED', 'DESTROYING', 'ORDERING', 'PROVISIONING'], true);
     $probeHint = '';
-    if (in_array($state, ['BOOTSTRAPPING', 'CONTROL_CHECK'], true) && !empty($r['ipv4'])) {
+    if (in_array($state, ['BOOTSTRAPPING', 'CONTROL_CHECK', 'KEEP'], true) && !empty($r['ipv4'])) {
         $probeHint = \Wlsearch\Probe\CloudInitBuilder::oneLiner(
             (string) ($r['provider'] ?? 'timeweb'),
             $id
         );
+    }
+    $rootPass = '';
+    if (!empty($r['provider_meta'])) {
+        $pm = json_decode((string) $r['provider_meta'], true);
+        if (is_array($pm) && !empty($pm['root_password'])) {
+            $rootPass = (string) $pm['root_password'];
+        }
     }
     $accLabel = '';
     if (!empty($r['account_name'])) {
@@ -82,6 +89,15 @@ $renderRunRows = static function (array $r, string $csrf, callable $badgeClass, 
                             <button type="button" class="btn btn-secondary btn-sm js-copy-ip"
                                     title="Копировать IP"
                                     data-ip="<?= View::e($ip) ?>">copy</button>
+                            <?php if ($rootPass !== ''): ?>
+                                <div style="margin-top:0.25rem;font-size:0.72rem">
+                                    <span class="muted">root</span>
+                                    <code title="Пароль root (SSH / serial)"><?= View::e($rootPass) ?></code>
+                                    <button type="button" class="btn btn-secondary btn-sm js-copy-ip"
+                                            title="Копировать пароль root"
+                                            data-ip="<?= View::e($rootPass) ?>">pwd</button>
+                                </div>
+                            <?php endif; ?>
                         <?php else: ?>
                             <span class="muted">—</span>
                         <?php endif; ?>

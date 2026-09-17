@@ -321,8 +321,12 @@ final class RunService
      * Остановить очередь: ORDERING→SKIPPED; живые в работе→KEEP (без destroy).
      * @return array{skipped:int,kept:int}
      */
-    public function stopAllQueued(string $actor, ?string $reason = null, bool $notify = true): array
-    {
+    public function stopAllQueued(
+        string $actor,
+        ?string $reason = null,
+        bool $notify = true,
+        ?int $exceptRunId = null
+    ): array {
         $reason = $reason !== null && trim($reason) !== '' ? trim($reason) : 'остановлено вручную';
         $skipMsg = mb_substr($reason, 0, 500);
         $keepMsg = mb_substr($reason . ' (VPS сохранён)', 0, 500);
@@ -337,18 +341,29 @@ final class RunService
         $skip->execute([$skipMsg]);
         $skipped = $skip->rowCount();
 
-        $keep = $this->pdo->prepare(
-            "UPDATE runs SET state = 'KEEP', verdict = 'KEEP', keep_on_fail = 1,
-                    error_message = ?, updated_at = NOW()
-             WHERE state IN ('PROVISIONING','BOOTSTRAPPING','CONTROL_CHECK','BS_CHECK')"
-        );
-        $keep->execute([$keepMsg]);
+        if ($exceptRunId !== null && $exceptRunId > 0) {
+            $keep = $this->pdo->prepare(
+                "UPDATE runs SET state = 'KEEP', verdict = 'KEEP', keep_on_fail = 1,
+                        error_message = ?, updated_at = NOW()
+                 WHERE state IN ('PROVISIONING','BOOTSTRAPPING','CONTROL_CHECK','BS_CHECK')
+                   AND id != ?"
+            );
+            $keep->execute([$keepMsg, $exceptRunId]);
+        } else {
+            $keep = $this->pdo->prepare(
+                "UPDATE runs SET state = 'KEEP', verdict = 'KEEP', keep_on_fail = 1,
+                        error_message = ?, updated_at = NOW()
+                 WHERE state IN ('PROVISIONING','BOOTSTRAPPING','CONTROL_CHECK','BS_CHECK')"
+            );
+            $keep->execute([$keepMsg]);
+        }
         $kept = $keep->rowCount();
 
         Audit::log($actor, 'run.stop_all', 'runs', null, [
             'skipped' => $skipped,
             'kept' => $kept,
             'reason' => $reason,
+            'except_run_id' => $exceptRunId,
         ]);
         if ($notify) {
             $this->tg->send("wlsearch: STOP очередь — skipped={$skipped} kept={$kept} (без destroy) — {$reason}");
@@ -358,21 +373,33 @@ final class RunService
     }
 
     /**
-     * IP попал в избранную подсеть: KEEP этого run, полная остановка очереди, Telegram.
+     * Избранная подсеть: очередь STOP, IP protect, этот run → BOOTSTRAPPING (probe), потом finishFavoriteKeep.
      *
      * @param array{cidr:string, note:?string} $match
+     * @param array<string, mixed> $meta
      */
-    public function hitFavoriteSubnet(int $runId, string $ipv4, array $match, ?int $asn = null, ?string $asnOrg = null): void
-    {
+    public function beginFavoriteSubnet(
+        int $runId,
+        string $ipv4,
+        array $match,
+        ?int $asn = null,
+        ?string $asnOrg = null,
+        array $meta = []
+    ): void {
         $cidr = (string) ($match['cidr'] ?? '');
         $note = $match['note'] ?? null;
-        $hitMsg = 'избранная подсеть попалась: ' . $cidr . ' ip=' . $ipv4
+        $hitMsg = 'избранная подсеть — жду probe: ' . $cidr . ' ip=' . $ipv4
             . ($note !== null && $note !== '' ? ' (' . $note . ')' : '');
+
+        $meta['favorite_keep'] = 1;
+        $meta['favorite_cidr'] = $cidr;
+        $meta['favorite_note'] = $note;
+        $meta['favorite_hit_at'] = date('c');
 
         $upd = $this->pdo->prepare(
             "UPDATE runs SET ipv4 = ?, asn = ?, asn_org = ?,
-                    state = 'KEEP', verdict = 'KEEP', keep_on_fail = 1,
-                    error_message = ?, updated_at = NOW()
+                    state = 'BOOTSTRAPPING', keep_on_fail = 1,
+                    error_message = ?, provider_meta = ?, updated_at = NOW()
              WHERE id = ?"
         );
         $upd->execute([
@@ -380,23 +407,25 @@ final class RunService
             $asn,
             $asnOrg !== null ? mb_substr($asnOrg, 0, 128) : null,
             mb_substr($hitMsg, 0, 500),
+            json_encode($meta, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
             $runId,
         ]);
 
         $stop = $this->stopAllQueued(
             'worker',
             'остановка: избранная подсеть попалась',
-            false
+            false,
+            $runId
         );
 
-        // stopAllQueued мог перезаписать error_message этого run — вернём hit-текст
+        // stop мог не трогать этот run — на всякий случай вернём BOOTSTRAPPING + текст
         $this->pdo->prepare(
-            "UPDATE runs SET state = 'KEEP', verdict = 'KEEP', keep_on_fail = 1,
+            "UPDATE runs SET state = 'BOOTSTRAPPING', keep_on_fail = 1,
                     error_message = ?, updated_at = NOW()
              WHERE id = ?"
         )->execute([mb_substr($hitMsg, 0, 500), $runId]);
 
-        Audit::log('worker', 'run.favorite_subnet', 'run', (string) $runId, [
+        Audit::log('worker', 'run.favorite_subnet_begin', 'run', (string) $runId, [
             'ipv4' => $ipv4,
             'cidr' => $cidr,
             'note' => $note,
@@ -405,10 +434,10 @@ final class RunService
         ]);
 
         $this->tg->send(
-            "wlsearch: избранная подсеть попалась!\n"
+            "wlsearch: избранная подсеть!\n"
             . "run #{$runId} ip={$ipv4} cidr={$cidr}"
             . ($note !== null && $note !== '' ? " — {$note}" : '')
-            . "\nочередь остановлена: skipped={$stop['skipped']} kept={$stop['kept']} (VPS сохранён)"
+            . "\nставлю probe, потом KEEP. очередь: skipped={$stop['skipped']} kept={$stop['kept']}"
         );
 
         (new \Wlsearch\ProtectedIp\ProtectedIpService($this->pdo))->protect(
@@ -417,6 +446,58 @@ final class RunService
             $runId,
             $hitMsg
         );
+    }
+
+    /**
+     * После probe (или timeout без destroy): финальный KEEP по избранной подсети.
+     *
+     * @param array<string, mixed> $meta
+     */
+    public function finishFavoriteKeep(int $runId, string $ipv4, array $meta = [], ?string $probeNote = null): void
+    {
+        $cidr = (string) ($meta['favorite_cidr'] ?? '');
+        $note = isset($meta['favorite_note']) ? (string) $meta['favorite_note'] : '';
+        $hitMsg = 'избранная подсеть попалась: ' . ($cidr !== '' ? $cidr . ' ' : '')
+            . 'ip=' . $ipv4
+            . ($note !== '' ? ' (' . $note . ')' : '')
+            . ($probeNote !== null && $probeNote !== '' ? ' — ' . $probeNote : '');
+
+        $meta['favorite_keep_done'] = 1;
+        $meta['favorite_keep_at'] = date('c');
+
+        $this->pdo->prepare(
+            "UPDATE runs SET state = 'KEEP', verdict = 'KEEP', keep_on_fail = 1,
+                    error_message = ?, provider_meta = ?, updated_at = NOW()
+             WHERE id = ?"
+        )->execute([
+            mb_substr($hitMsg, 0, 500),
+            json_encode($meta, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+            $runId,
+        ]);
+
+        Audit::log('worker', 'run.favorite_subnet', 'run', (string) $runId, [
+            'ipv4' => $ipv4,
+            'cidr' => $cidr,
+            'probe_note' => $probeNote,
+        ]);
+
+        $this->tg->send(
+            "wlsearch: KEEP (избранная) run #{$runId} ip={$ipv4}"
+            . ($probeNote !== null && $probeNote !== '' ? "\n{$probeNote}" : '')
+        );
+    }
+
+    /**
+     * @deprecated use beginFavoriteSubnet + finishFavoriteKeep
+     * @param array{cidr:string, note:?string} $match
+     */
+    public function hitFavoriteSubnet(int $runId, string $ipv4, array $match, ?int $asn = null, ?string $asnOrg = null): void
+    {
+        $this->beginFavoriteSubnet($runId, $ipv4, $match, $asn, $asnOrg);
+        $this->finishFavoriteKeep($runId, $ipv4, [
+            'favorite_cidr' => (string) ($match['cidr'] ?? ''),
+            'favorite_note' => $match['note'] ?? null,
+        ], 'legacy immediate KEEP');
     }
 
     public function requestDestroy(int $runId, string $actor): void
