@@ -312,3 +312,7 @@ $renderRunRows = static function (array $r, string $csrf, callable $badgeClass, 
             setTimeout(arguments.callee, ms);
             return;
         }
+        window.location.reload();
+    }, ms);
+})();
+</script>
