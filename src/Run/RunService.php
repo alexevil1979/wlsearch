@@ -719,6 +719,70 @@ final class RunService
         return 'FAIL_BS: ' . $result['detail'];
     }
 
+    /**
+     * Установить пароль root на живой VM (cloud-init + reboot).
+     * По умолчанию qweasd333123. Также переустанавливает probe.
+     */
+    public function setRootPassword(int $runId, string $actor, ?string $password = null): string
+    {
+        $run = $this->get($runId);
+        if ($run === null) {
+            throw new \RuntimeException('Run not found');
+        }
+        $serverId = (string) ($run['provider_server_id'] ?? '');
+        if ($serverId === '') {
+            throw new \RuntimeException('Нет provider_server_id — VM не создана');
+        }
+        if (in_array((string) $run['state'], ['DESTROYED', 'DESTROYING', 'ORDERING'], true)) {
+            throw new \RuntimeException('Run в состоянии ' . $run['state'] . ' — установка пароля недоступна');
+        }
+
+        $pass = \Wlsearch\Probe\CloudInitBuilder::sanitizeRootPassword(
+            $password ?? \Wlsearch\Probe\CloudInitBuilder::DEFAULT_ROOT_PASSWORD
+        );
+        $provider = \Wlsearch\Provider\ProviderFactory::forRun($run);
+        if (!method_exists($provider, 'repushCloudInitAndReboot')) {
+            throw new \RuntimeException('Провайдер ' . (string) $run['provider'] . ' не умеет repush cloud-init');
+        }
+
+        $script = \Wlsearch\Probe\CloudInitBuilder::forSetRootPassword(
+            (string) ($run['provider'] ?? 'unknown'),
+            $runId,
+            $pass
+        );
+        $provider->repushCloudInitAndReboot($serverId, $script);
+
+        $meta = [];
+        if (!empty($run['provider_meta'])) {
+            $decoded = json_decode((string) $run['provider_meta'], true);
+            if (is_array($decoded)) {
+                $meta = $decoded;
+            }
+        }
+        $meta['root_password'] = $pass;
+        $meta['root_password_set_at'] = date('c');
+        $meta['root_password_set_by'] = $actor;
+
+        $this->pdo->prepare(
+            'UPDATE runs SET provider_meta = ?, updated_at = NOW() WHERE id = ?'
+        )->execute([
+            json_encode($meta, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+            $runId,
+        ]);
+
+        Audit::log($actor, 'run.set_root_password', 'run', (string) $runId, [
+            'ipv4' => (string) ($run['ipv4'] ?? ''),
+            'server_id' => $serverId,
+        ]);
+        $this->tg->send(
+            "wlsearch: root password set run #{$runId} ip="
+            . ((string) ($run['ipv4'] ?? '') !== '' ? (string) $run['ipv4'] : '-')
+            . ' (reboot)'
+        );
+
+        return "Пароль root установлен: {$pass}. VM перезагружается (~1–2 мин), потом ssh root@IP";
+    }
+
     /** @return array<string, mixed>|null */
     public function get(int $id): ?array
     {

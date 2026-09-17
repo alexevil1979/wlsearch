@@ -196,6 +196,11 @@ final class RunsController
         $this->action((int) $id, 'retry_bs');
     }
 
+    public function setRootPassword(string $id): void
+    {
+        $this->action((int) $id, 'set_root_password');
+    }
+
     private function action(int $id, string $action): void
     {
         $this->requireAuth();
@@ -214,9 +219,10 @@ final class RunsController
                 'keep' => $service->requestKeep($id, $actor),
                 'retry_control' => $service->retryControl($id, $actor),
                 'retry_bs' => Flash::set('ok', $service->retryBs($id, $actor)),
+                'set_root_password' => Flash::set('ok', $service->setRootPassword($id, $actor)),
                 default => throw new \InvalidArgumentException('unknown action'),
             };
-            if ($action !== 'retry_bs') {
+            if (!in_array($action, ['retry_bs', 'set_root_password'], true)) {
                 Flash::set('ok', "Действие {$action} для run #{$id} принято.");
             }
         } catch (\Throwable $e) {

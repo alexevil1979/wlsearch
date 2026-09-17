@@ -192,10 +192,9 @@ IP сразу в protected; destroy VM при fail/OS-reinstall для избр�
 
 ### Root-пароль VM
 
-При create wlsearch генерирует пароль root и кладёт в cloud-init (`chpasswd` + `ssh_pwauth`).  
-Смотри в Runs рядом с IP кнопку **pwd** (хранится в `provider_meta.root_password`).  
-SSH: `ssh root@IP` с этим паролем. Serial console в Yandex — тот же пароль.  
-У старых VM (до этого патча) пароля в системе нет — только serial / свой ключ.
+По умолчанию пароль root: **`qweasd333123`** (create + кнопка **root** в Runs).  
+Кнопка **root** → cloud-init + reboot (~1–2 мин) → `ssh root@IP` / serial console.  
+Пароль также виден рядом с IP (кнопка **pwd**).
 
 ---
 

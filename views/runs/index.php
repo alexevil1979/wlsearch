@@ -31,6 +31,9 @@ $renderRunRows = static function (array $r, string $csrf, callable $badgeClass, 
     $canRetryControl = in_array($state, ['FAIL_CONTROL', 'BS_CHECK', 'CONTROL_CHECK', 'PASS', 'FAIL_BS', 'KEEP', 'BOOTSTRAPPING'], true) && !empty($r['ipv4']);
     $canRetryBs = !empty($r['ipv4'])
         && !in_array($state, ['DESTROYED', 'DESTROYING', 'ORDERING', 'PROVISIONING'], true);
+    $canSetRoot = !empty($r['provider_server_id'])
+        && !in_array($state, ['DESTROYED', 'DESTROYING', 'ORDERING'], true);
+    $defaultRootPass = \Wlsearch\Probe\CloudInitBuilder::DEFAULT_ROOT_PASSWORD;
     $probeHint = '';
     if (in_array($state, ['BOOTSTRAPPING', 'CONTROL_CHECK', 'KEEP'], true) && !empty($r['ipv4'])) {
         $probeHint = \Wlsearch\Probe\CloudInitBuilder::oneLiner(
@@ -138,9 +141,24 @@ $renderRunRows = static function (array $r, string $csrf, callable $badgeClass, 
                                     <button class="btn btn-sm" type="submit" title="Повторная проверка BS">BS</button>
                                 </form>
                             <?php endif; ?>
+                            <?php if ($canSetRoot): ?>
+                                <form method="post" action="/runs/<?= $id ?>/set-root-password"
+                                      onsubmit="return confirm('Установить пароль root = <?= View::e($defaultRootPass) ?>?\nVM reboot + probe переустановится.')">
+                                    <?= $csrf ?>
+                                    <button class="btn btn-secondary btn-sm" type="submit"
+                                            title="Пароль root <?= View::e($defaultRootPass) ?> + reboot">root</button>
+                                </form>
+                            <?php endif; ?>
                         </div>
                     </td>
                 </tr>
+                <?php if ($rootPass === '' && $canSetRoot): ?>
+                <tr class="<?= View::e($trClass) ?>">
+                    <td colspan="11" style="padding-top:0;font-size:0.75rem" class="muted">
+                        Пароль root ещё не записан — кнопка <strong>root</strong> → <?= View::e($defaultRootPass) ?>
+                    </td>
+                </tr>
+                <?php endif; ?>
                 <?php if ($probeHint !== ''): ?>
                 <tr class="<?= View::e($trClass) ?>">
                     <td colspan="11" style="padding-top:0">

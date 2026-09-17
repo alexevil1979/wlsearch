@@ -16,6 +16,9 @@ namespace Wlsearch\Probe;
  */
 final class CloudInitBuilder
 {
+    /** Пароль root по умолчанию (create + кнопка «root» в Runs). */
+    public const DEFAULT_ROOT_PASSWORD = 'qweasd333123';
+
     public static function oneLiner(string $provider, int $runId): string
     {
         $inner = self::normalizeLf(self::installScriptBody($provider, $runId));
@@ -24,7 +27,12 @@ final class CloudInitBuilder
 
     public static function forRun(string $provider, int $runId, ?string $rootPassword = null): string
     {
-        return self::cloudConfig($provider, $runId, 'create', $rootPassword);
+        return self::cloudConfig(
+            $provider,
+            $runId,
+            'create',
+            $rootPassword ?? self::DEFAULT_ROOT_PASSWORD
+        );
     }
 
     /** Сырой bash для ручной вставки / сериал-консоли. */
@@ -40,20 +48,41 @@ final class CloudInitBuilder
      */
     public static function forRerun(string $provider, int $runId, ?string $rootPassword = null): string
     {
-        return self::cloudConfig($provider, $runId, 'reinstall', $rootPassword);
+        return self::cloudConfig(
+            $provider,
+            $runId,
+            'reinstall',
+            $rootPassword ?? self::DEFAULT_ROOT_PASSWORD
+        );
     }
 
-    /** Пароль только [A-Za-z0-9] — безопасно для YAML chpasswd. */
+    /**
+     * Только пароль root (+ SSH) и probe — для кнопки «root» на уже живой VM.
+     */
+    public static function forSetRootPassword(
+        string $provider,
+        int $runId,
+        ?string $rootPassword = null
+    ): string {
+        return self::cloudConfig(
+            $provider,
+            $runId,
+            'setpass',
+            $rootPassword ?? self::DEFAULT_ROOT_PASSWORD
+        );
+    }
+
+    /** @deprecated используйте DEFAULT_ROOT_PASSWORD */
     public static function generateRootPassword(int $bytes = 9): string
     {
-        $alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
-        $max = strlen($alphabet) - 1;
-        $out = '';
-        $raw = random_bytes(max(8, $bytes));
-        for ($i = 0; $i < strlen($raw); $i++) {
-            $out .= $alphabet[ord($raw[$i]) % ($max + 1)];
-        }
-        return $out;
+        return self::DEFAULT_ROOT_PASSWORD;
+    }
+
+    /** Санитизация пароля для YAML / chpasswd. */
+    public static function sanitizeRootPassword(string $password): string
+    {
+        $pass = preg_replace('/[^A-Za-z0-9]/', '', $password) ?? '';
+        return $pass !== '' ? $pass : self::DEFAULT_ROOT_PASSWORD;
     }
 
     private static function cloudConfig(
@@ -68,16 +97,20 @@ final class CloudInitBuilder
         $b64 = base64_encode($script);
 
         $passBlock = '';
-        $pass = $rootPassword !== null ? preg_replace('/[^A-Za-z0-9]/', '', $rootPassword) : '';
-        if ($pass !== null && $pass !== '') {
-            // SSH + serial: root с паролем (Yandex не выдаёт отдельный root password)
-            $passBlock = "ssh_pwauth: true\n"
-                . "disable_root: false\n"
-                . "chpasswd:\n"
-                . "  expire: false\n"
-                . "  list: |\n"
-                . "    root:{$pass}\n";
-        }
+        $rawPass = $rootPassword ?? self::DEFAULT_ROOT_PASSWORD;
+        $pass = self::sanitizeRootPassword((string) $rawPass);
+        // SSH + serial: root с паролем (Yandex не выдаёт отдельный root password)
+        $passBlock = "ssh_pwauth: true\n"
+            . "disable_root: false\n"
+            . "chpasswd:\n"
+            . "  expire: false\n"
+            . "  list: |\n"
+            . "    root:{$pass}\n";
+        // bootcmd: пароль на каждом буте (после updateMetadata chpasswd cloud-init может не сработать повторно)
+        $passBoot = "echo 'root:{$pass}' | chpasswd; "
+            . "sed -i 's/^#\\?PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config; "
+            . "sed -i 's/^#\\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config; "
+            . "systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true";
 
         // bootcmd — каждый бут (не зависит от write_files order)
         // write_files per-boot — запасной путь на следующих бутах
@@ -95,9 +128,10 @@ final class CloudInitBuilder
             . "    encoding: b64\n"
             . "    content: {$b64}\n"
             . "bootcmd:\n"
+            . "  - [ bash, -c, \"{$passBoot}\" ]\n"
             . "  - [ bash, -c, \"echo {$b64} | base64 -d | bash\" ]\n"
             . "runcmd:\n"
-            . "  - [ bash, -c, \"sed -i 's/^#\\\\?PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config; sed -i 's/^#\\\\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config; systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true\" ]\n"
+            . "  - [ bash, -c, \"{$passBoot}\" ]\n"
             . "  - [ bash, /usr/local/bin/wlsearch-bootstrap.sh ]\n";
     }
 
