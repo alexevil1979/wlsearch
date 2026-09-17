@@ -168,27 +168,10 @@ final class Worker
         $id = (int) $run['id'];
         $providerName = (string) ($run['provider'] ?? '');
 
-        // Глобальная пауза после Yandex 429 (vpc.externalAddressesCreation.rate)
-        if ($providerName === 'yandex') {
-            $waitUntil = Settings::int('YANDEX_IP_CREATE_WAIT_UNTIL', 0);
-            if ($waitUntil > time()) {
-                $left = $waitUntil - time();
-                $this->pdo->prepare(
-                    'UPDATE runs SET error_message = ?, updated_at = NOW() WHERE id = ? AND state = \'ORDERING\''
-                )->execute([
-                    mb_substr(
-                        'ожидание квоты Yandex IP ~' . (int) ceil($left / 60) . ' мин (до '
-                        . date('H:i:s', $waitUntil) . ')',
-                        0,
-                        500
-                    ),
-                    $id,
-                ]);
-                return;
-            }
-            if ($waitUntil > 0 && $waitUntil <= time()) {
-                Settings::put('YANDEX_IP_CREATE_WAIT_UNTIL', '0');
-            }
+        // Снять устаревший глобальный ключ (квота теперь per-account)
+        $legacyWait = Settings::int('YANDEX_IP_CREATE_WAIT_UNTIL', 0);
+        if ($legacyWait > 0) {
+            Settings::put('YANDEX_IP_CREATE_WAIT_UNTIL', '0');
         }
 
         $maxParallel = max(1, Settings::int('MAX_PARALLEL_VMS', 1));
@@ -248,6 +231,33 @@ final class Worker
             }
         }
 
+        // Yandex: квота IP rate — per-account; если этот акк в паузе — переключить на другой
+        if ($providerName === 'yandex' && $accountId > 0) {
+            $waitUntil = $this->yandexAccountQuotaWaitUntil($accountId);
+            if ($waitUntil > time()) {
+                $switched = $this->reassignOrderingAccount($run, [$accountId], true);
+                if ($switched) {
+                    $run = $this->runs->get($id) ?? $run;
+                    $accountId = (int) ($run['provider_account_id'] ?? 0);
+                    fwrite(STDOUT, "run #{$id}: acc quota wait → switched to #{$accountId}\n");
+                } else {
+                    $left = $waitUntil - time();
+                    $this->pdo->prepare(
+                        "UPDATE runs SET state = 'ORDERING', error_message = ?, updated_at = NOW() WHERE id = ?"
+                    )->execute([
+                        mb_substr(
+                            "ожидание квоты Yandex IP на acc #{$accountId} ~"
+                            . (int) ceil($left / 60) . ' мин (до ' . date('H:i:s', $waitUntil) . ')',
+                            0,
+                            500
+                        ),
+                        $id,
+                    ]);
+                    return;
+                }
+            }
+        }
+
         $name = sprintf('wlsearch-%d-%s', $id, date('His'));
         $cloudInit = CloudInitBuilder::forRun((string) $run['provider'], $id);
 
@@ -258,6 +268,20 @@ final class Worker
         for ($attempt = 0; $attempt < $maxAccountTries; $attempt++) {
             if ($accountId > 0) {
                 $tried[$accountId] = true;
+            }
+            // Не пробовать аккаунт, у которого ещё активна своя квота
+            if ($providerName === 'yandex' && $accountId > 0) {
+                $w = $this->yandexAccountQuotaWaitUntil($accountId);
+                if ($w > time()) {
+                    $switched = $this->reassignOrderingAccount($run, array_keys($tried), true);
+                    if ($switched) {
+                        $run = $this->runs->get($id) ?? $run;
+                        $accountId = (int) ($run['provider_account_id'] ?? 0);
+                        continue;
+                    }
+                    $this->deferForYandexIpQuota($id, 'all accounts in quota wait', $accountId);
+                    return;
+                }
             }
             $run['provider_account_id'] = $accountId > 0 ? $accountId : null;
             $provider = ProviderFactory::forRun($run);
@@ -275,7 +299,18 @@ final class Worker
                 $lastBalanceErr = null;
                 break;
             } catch (\Wlsearch\Provider\ProviderQuotaException $e) {
-                $this->deferForYandexIpQuota($id, $e->getMessage());
+                if ($accountId > 0) {
+                    $this->setYandexAccountQuotaWait($accountId);
+                    $accounts->markUsed($accountId, $e->getMessage());
+                }
+                $switched = $this->reassignOrderingAccount($run, array_keys($tried), true);
+                if ($switched) {
+                    $run = $this->runs->get($id) ?? $run;
+                    $accountId = (int) ($run['provider_account_id'] ?? 0);
+                    fwrite(STDOUT, "run #{$id}: quota on prev acc → try #{$accountId}\n");
+                    continue;
+                }
+                $this->deferForYandexIpQuota($id, $e->getMessage(), $accountId);
                 return;
             } catch (\Wlsearch\Provider\BalanceShortException $e) {
                 // больше не блокируем create по оценке запаса; на всякий случай пробуем другой аккаунт
@@ -298,7 +333,16 @@ final class Worker
                 }
                 // На всякий случай: 429 в тексте без спец. exception
                 if ($this->looksLikeYandexIpQuota($e->getMessage())) {
-                    $this->deferForYandexIpQuota($id, $e->getMessage());
+                    if ($accountId > 0) {
+                        $this->setYandexAccountQuotaWait($accountId);
+                    }
+                    $switched = $this->reassignOrderingAccount($run, array_keys($tried), true);
+                    if ($switched) {
+                        $run = $this->runs->get($id) ?? $run;
+                        $accountId = (int) ($run['provider_account_id'] ?? 0);
+                        continue;
+                    }
+                    $this->deferForYandexIpQuota($id, $e->getMessage(), $accountId);
                     return;
                 }
                 throw $e;
@@ -333,52 +377,88 @@ final class Worker
             || (str_contains($message, 'HTTP 429') && str_contains($message, 'Quota'));
     }
 
-    private function deferForYandexIpQuota(int $runId, string $message): void
+    private function yandexAccountQuotaWaitKey(int $accountId): string
+    {
+        return 'YANDEX_IP_CREATE_WAIT_UNTIL_ACC_' . max(0, $accountId);
+    }
+
+    private function yandexAccountQuotaWaitUntil(int $accountId): int
+    {
+        if ($accountId <= 0) {
+            return 0;
+        }
+        $until = Settings::int($this->yandexAccountQuotaWaitKey($accountId), 0);
+        if ($until > 0 && $until <= time()) {
+            Settings::put($this->yandexAccountQuotaWaitKey($accountId), '0');
+            return 0;
+        }
+        return $until;
+    }
+
+    private function setYandexAccountQuotaWait(int $accountId): int
     {
         $cooldown = max(300, Settings::int('YANDEX_QUOTA_COOLDOWN_SEC', 3600));
         $waitUntil = time() + $cooldown;
-        Settings::put('YANDEX_IP_CREATE_WAIT_UNTIL', (string) $waitUntil);
+        if ($accountId > 0) {
+            Settings::put($this->yandexAccountQuotaWaitKey($accountId), (string) $waitUntil);
+        }
+        return $waitUntil;
+    }
 
-        $msg = 'ожидание квоты Yandex IP до ' . date('H:i:s', $waitUntil)
-            . ' (~' . (int) ceil($cooldown / 60) . ' мин): vpc.externalAddressesCreation.rate';
+    private function deferForYandexIpQuota(int $runId, string $message, int $accountId = 0): void
+    {
+        $waitUntil = $accountId > 0
+            ? $this->yandexAccountQuotaWaitUntil($accountId)
+            : 0;
+        if ($waitUntil <= time()) {
+            $waitUntil = $this->setYandexAccountQuotaWait($accountId);
+        }
+        $cooldownLeft = max(0, $waitUntil - time());
+        $accLabel = $accountId > 0 ? "acc #{$accountId}" : 'acc ?';
+        $msg = "ожидание квоты Yandex IP на {$accLabel} до " . date('H:i:s', $waitUntil)
+            . ' (~' . (int) ceil($cooldownLeft / 60) . ' мин): vpc.externalAddressesCreation.rate';
         $this->pdo->prepare(
             "UPDATE runs SET state = 'ORDERING', error_message = ?, updated_at = NOW()
              WHERE id = ?"
         )->execute([mb_substr($msg, 0, 500), $runId]);
 
-        // Вернуть в очередь и другие ERROR по этой квоте
-        $this->pdo->prepare(
-            "UPDATE runs SET state = 'ORDERING', error_message = ?, updated_at = NOW()
-             WHERE state = 'ERROR'
-               AND provider = 'yandex'
-               AND provider_server_id IS NULL
-               AND (error_message LIKE '%externalAddressesCreation.rate%'
-                    OR error_message LIKE '%HTTP 429%Quota%')"
-        )->execute([mb_substr($msg, 0, 500)]);
+        // Только ERROR этого же аккаунта (не чужие)
+        if ($accountId > 0) {
+            $this->pdo->prepare(
+                "UPDATE runs SET state = 'ORDERING', error_message = ?, updated_at = NOW()
+                 WHERE state = 'ERROR'
+                   AND provider = 'yandex'
+                   AND provider_account_id = ?
+                   AND provider_server_id IS NULL
+                   AND (error_message LIKE '%externalAddressesCreation.rate%'
+                        OR error_message LIKE '%HTTP 429%')"
+            )->execute([mb_substr($msg, 0, 500), $accountId]);
+        }
 
-        $lastTg = Settings::int('YANDEX_QUOTA_TG_AT', 0);
+        $tgKey = 'YANDEX_QUOTA_TG_AT_ACC_' . max(0, $accountId);
+        $lastTg = Settings::int($tgKey, 0);
         if ($lastTg < time() - 600) {
-            Settings::put('YANDEX_QUOTA_TG_AT', (string) time());
+            Settings::put($tgKey, (string) time());
             $this->tg->send(
-                "wlsearch: квота Yandex IP (rate 64) — пауза create ~"
-                . (int) ceil($cooldown / 60) . " мин до " . date('H:i:s', $waitUntil)
-                . "\nrun #{$runId}"
+                "wlsearch: квота Yandex IP на {$accLabel} (rate) — пауза create ~"
+                . (int) ceil($cooldownLeft / 60) . " мин до " . date('H:i:s', $waitUntil)
+                . "\nrun #{$runId} (другие аккаунты не блокируются)"
             );
         }
         FileLog::write('yandex', 'quota:defer', [
             'run_id' => $runId,
+            'account_id' => $accountId,
             'wait_until' => date('c', $waitUntil),
-            'cooldown_s' => $cooldown,
             'error' => mb_substr($message, 0, 400),
         ]);
-        fwrite(STDOUT, "run #{$runId}: Yandex IP quota — defer {$cooldown}s\n");
+        fwrite(STDOUT, "run #{$runId}: Yandex IP quota on {$accLabel} — defer\n");
     }
 
     /**
      * Переназначить ORDERING на другой enabled аккаунт.
      * @param list<int> $excludeIds
      */
-    private function reassignOrderingAccount(array $run, array $excludeIds): bool
+    private function reassignOrderingAccount(array $run, array $excludeIds, bool $skipQuotaWait = false): bool
     {
         $id = (int) $run['id'];
         $provider = (string) $run['provider'];
@@ -390,17 +470,22 @@ final class Worker
             if (isset($exclude[$aid])) {
                 continue;
             }
-            // Не брать аккаунт с живым PASS/KEEP
-            $st = $this->pdo->prepare(
-                "SELECT COUNT(*) FROM runs
-                 WHERE provider_account_id = ?
-                   AND state IN ('PASS','KEEP')
-                   AND provider_server_id IS NOT NULL AND provider_server_id != ''
-                   AND destroyed_at IS NULL"
-            );
-            $st->execute([$aid]);
-            if ((int) $st->fetchColumn() > 0) {
+            if ($skipQuotaWait && $provider === 'yandex' && $this->yandexAccountQuotaWaitUntil($aid) > time()) {
                 continue;
+            }
+            // Не брать аккаунт с живым PASS/KEEP (timeweb burn)
+            if ($provider === 'timeweb') {
+                $st = $this->pdo->prepare(
+                    "SELECT COUNT(*) FROM runs
+                     WHERE provider_account_id = ?
+                       AND state IN ('PASS','KEEP')
+                       AND provider_server_id IS NOT NULL AND provider_server_id != ''
+                       AND destroyed_at IS NULL"
+                );
+                $st->execute([$aid]);
+                if ((int) $st->fetchColumn() > 0) {
+                    continue;
+                }
             }
             $this->pdo->prepare(
                 'UPDATE runs SET provider_account_id = ?, error_message = NULL, updated_at = NOW() WHERE id = ?'
