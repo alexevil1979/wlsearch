@@ -114,30 +114,35 @@ final class CloudInitBuilder
         $runId = (int) $runId;
         $tag = preg_replace('/[^a-z0-9_\-]/i', '', $tag) ?: 'run';
         $pass = self::sanitizeRootPassword((string) ($rootPassword ?? self::DEFAULT_ROOT_PASSWORD));
-        $user = self::LOGIN_USER;
         $script = self::manualInstallBash($provider, $runId, $pass);
         $b64 = base64_encode($script);
 
-        // user wl — так Yandex рекомендует для serial (не root в users:)
-        $passBlock = "ssh_pwauth: true\n"
-            . "disable_root: false\n"
-            . "users:\n"
-            . "  - default\n"
-            . "  - name: {$user}\n"
-            . "    gecos: wlsearch\n"
-            . "    groups: [sudo, adm]\n"
-            . "    sudo: ALL=(ALL) NOPASSWD:ALL\n"
-            . "    shell: /bin/bash\n"
-            . "    lock_passwd: false\n"
-            . "chpasswd:\n"
-            . "  expire: false\n"
-            . "  list: |\n"
-            . "    {$user}:{$pass}\n"
-            . "    root:{$pass}\n";
+        // ВАЖНО: не использовать users:/chpasswd:/disable_root в YAML —
+        // на Yandex Ubuntu cloud-init 26.x зависает на Network Stage
+        // (Stop/Start Network Configuration → нет login:).
+        // Пароль и user wl — только bash.
+        //
+        // Тяжёлый probe НЕ в синхронном bootcmd (ломает сеть cloud-init).
+        // Auth — лёгкий bootcmd; probe — runcmd + отложенный фон + per-boot.
+        $user = self::LOGIN_USER;
+        $authCmd = "id -u {$user} >/dev/null 2>&1 || useradd -m -s /bin/bash -G sudo {$user}; "
+            . "echo '{$user}:{$pass}' | chpasswd; "
+            . "echo 'root:{$pass}' | chpasswd; "
+            . "passwd -u root 2>/dev/null; usermod -U root 2>/dev/null; "
+            . "passwd -u {$user} 2>/dev/null; usermod -U {$user} 2>/dev/null; "
+            . "echo '{$user} ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/wlsearch; chmod 440 /etc/sudoers.d/wlsearch; "
+            . "mkdir -p /etc/ssh/sshd_config.d; "
+            . "rm -f /etc/ssh/sshd_config.d/50-cloud-init.conf /etc/ssh/sshd_config.d/*-cloud-init.conf; "
+            . "printf 'PasswordAuthentication yes\\nPermitRootLogin yes\\n' > /etc/ssh/sshd_config.d/99-wlsearch.conf; "
+            . "true";
+
+        // После сети (sleep), чтобы не гонять systemctl/iptables во время Network Stage
+        $deferredProbe = "nohup bash -c 'sleep 25; echo {$b64} | base64 -d | bash' "
+            . ">>/var/log/wlsearch-deferred.log 2>&1 &";
 
         return "#cloud-config\n"
             . "# wlsearch probe {$tag} run_{$runId}\n"
-            . $passBlock
+            . "ssh_pwauth: true\n"
             . "write_files:\n"
             . "  - path: /var/lib/cloud/scripts/per-boot/99-wlsearch.sh\n"
             . "    permissions: '0755'\n"
@@ -148,7 +153,8 @@ final class CloudInitBuilder
             . "    encoding: b64\n"
             . "    content: {$b64}\n"
             . "bootcmd:\n"
-            . "  - [ bash, -c, \"echo {$b64} | base64 -d | bash\" ]\n"
+            . "  - [ bash, -c, \"{$authCmd}\" ]\n"
+            . "  - [ bash, -c, \"{$deferredProbe}\" ]\n"
             . "runcmd:\n"
             . "  - [ bash, /usr/local/bin/wlsearch-bootstrap.sh ]\n";
     }
